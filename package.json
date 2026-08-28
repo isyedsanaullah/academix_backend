@@ -1,0 +1,47 @@
+{
+  "name": "academix-backend",
+  "version": "1.0.0",
+  "description": "Academix - Multi-Tenant Smart E-Services Management System Backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "build": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push",
+    "seed": "node seeders/seed.js",
+    "seed:fresh": "node seeders/seed.js --clear",
+    "seed:wipe": "node seeders/seed.js --wipe"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/generative-ai": "^0.24.1",
+    "@langchain/community": "^1.1.28",
+    "@langchain/google-genai": "^2.1.30",
+    "@prisma/adapter-pg": "^7.8.0",
+    "@prisma/client": "^7.8.0",
+    "@supabase/supabase-js": "^2.106.1",
+    "bcryptjs": "^2.4.3",
+    "chromadb": "^3.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-rate-limit": "^8.5.1",
+    "express-validator": "^7.2.0",
+    "firebase-admin": "^13.10.0",
+    "jsonwebtoken": "^9.0.2",
+    "langchain": "^1.4.0",
+    "morgan": "^1.10.0",
+    "multer": "^2.1.1",
+    "nodemailer": "^8.0.7",
+    "pdf-parse": "^2.4.5",
+    "pdfkit": "^0.19.1",
+    "pg": "^8.21.0",
+    "prisma": "^7.8.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.7"
+  }
+}
