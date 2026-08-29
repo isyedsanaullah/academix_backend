@@ -2,6 +2,7 @@
 const { getDecryptedKey } = require('./aiApiKey.controller');
 const { generateStreamingResponse } = require('../services/aiService');
 const announcementService = require('../services/announcementService');
+const superAdminReportService = require('../services/superAdminReportService');
 
 exports.sendMessage = async (req, res, next) => {
   try {
@@ -107,6 +108,88 @@ exports.sendMessage = async (req, res, next) => {
       res.write(`data: ${JSON.stringify({ type: 'status', stage: 'Complete' })}\n\n`);
       res.write(`data: ${JSON.stringify({ type: 'announcement', announcement: draft, done: true })}\n\n`);
       return res.end();
+    }
+
+    // Handle Super Admin PDF Report Mode
+    if (mode === 'report') {
+      if (req.user.role !== 'superAdmin') {
+        return res.status(403).json({
+          success: false,
+          message: 'AI PDF Report Generation is available exclusively for Super Admin.'
+        });
+      }
+
+      const apiKey = await getDecryptedKey(req.user._id);
+
+      let conversation;
+      if (conversationId) {
+        conversation = await tenantDb.chatHistory.findFirst({
+          where: { id: conversationId, userId: req.user._id }
+        });
+      }
+
+      if (!conversation) {
+        const title = `Report: ${message.length > 35 ? message.substring(0, 35) + '...' : message}`;
+        conversation = await tenantDb.chatHistory.create({
+          data: {
+            userId: req.user._id,
+            collegeId: req.collegeId || req.user.college_id || null,
+            role: req.user.role,
+            title,
+            messages: [],
+            metadata: { messageCount: 0, mode: 'report' }
+          }
+        });
+      }
+
+      let messages = conversation.messages || [];
+      if (!Array.isArray(messages)) messages = [];
+      messages.push({ role: 'user', content: message, mode: 'report', timestamp: new Date() });
+
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Conversation-Id': conversation.id
+      });
+
+      res.write(`data: ${JSON.stringify({ conversationId: conversation.id, type: 'meta' })}\n\n`);
+
+      try {
+        const reportResult = await superAdminReportService.orchestrateReportGeneration({
+          message,
+          apiKey,
+          onProgress: (stage) => {
+            res.write(`data: ${JSON.stringify({ type: 'status', stage })}\n\n`);
+          }
+        });
+
+        // Report generated
+        messages.push({
+          role: 'assistant',
+          mode: 'report',
+          content: `Generated PDF Report: **${reportResult.title}**\n\n${reportResult.subtitle}`,
+          report: reportResult,
+          timestamp: new Date()
+        });
+
+        const metadata = conversation.metadata || {};
+        metadata.messageCount = messages.length;
+        metadata.lastReport = reportResult;
+
+        await tenantDb.chatHistory.update({
+          where: { id: conversation.id },
+          data: { messages, metadata }
+        });
+
+        res.write(`data: ${JSON.stringify({ type: 'status', stage: 'Complete' })}\n\n`);
+        res.write(`data: ${JSON.stringify({ type: 'report_ready', report: reportResult, done: true })}\n\n`);
+        return res.end();
+      } catch (genErr) {
+        console.error('Report Generation Error:', genErr);
+        res.write(`data: ${JSON.stringify({ type: 'error', message: genErr.message || 'Failed to generate report' })}\n\n`);
+        return res.end();
+      }
     }
 
     // Standard Chat Mode
@@ -361,4 +444,45 @@ exports.updateAnnouncementStatus = async (req, res, next) => {
 
     res.json({ success: true, message: 'Announcement status updated in conversation' });
   } catch (error) { next(error); }
+};
+
+// @desc    Download generated Super Admin PDF Report
+// @route   GET /api/ai/chat/reports/download/:token
+// @access  Private (superAdmin)
+exports.downloadReport = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const reportItem = superAdminReportService.getReportByToken(token);
+    if (!reportItem) {
+      return res.status(404).json({ success: false, message: 'Report has expired or is invalid. Please regenerate.' });
+    }
+
+    const filename = `${reportItem.metadata.title.replace(/[^a-zA-Z0-9_-]/g, '_')}_${Date.now()}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', reportItem.buffer.length);
+    res.end(reportItem.buffer);
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Preview generated Super Admin PDF Report inline in browser
+// @route   GET /api/ai/chat/reports/preview/:token
+// @access  Public / Token-authorized
+exports.previewReport = async (req, res, next) => {
+  try {
+    const { token } = req.params;
+    const reportItem = superAdminReportService.getReportByToken(token);
+    if (!reportItem) {
+      return res.status(404).send('Report has expired or is invalid. Please regenerate from Super Admin AI Chat.');
+    }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'inline');
+    res.setHeader('Content-Length', reportItem.buffer.length);
+    res.end(reportItem.buffer);
+  } catch (error) {
+    next(error);
+  }
 };

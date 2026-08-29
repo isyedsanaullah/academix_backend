@@ -2,7 +2,7 @@ const router = require('express').Router();
 const {
   getDashboard, getColleges, createCollege, getCollege,
   updateCollege, toggleCollegeStatus, deleteCollege,
-  updateCollegePlan, getSubscriptionOverview, getPlatformAnalytics
+  updateCollegePlan, updateCollegeFeatures, getSubscriptionOverview, getPlatformAnalytics
 } = require('../controllers/superAdmin.controller');
 const {
   getSubscriptionRequests, getSubscriptionRequest, updateSubscriptionRequest
@@ -29,6 +29,7 @@ router.route('/colleges').get(getColleges).post(createCollege);
 router.route('/colleges/:id').get(getCollege).put(updateCollege).delete(deleteCollege);
 router.put('/colleges/:id/status', toggleCollegeStatus);
 router.put('/colleges/:id/plan', updateCollegePlan);
+router.put('/colleges/:id/features', updateCollegeFeatures);
 
 // Subscription Requests management
 router.route('/subscription-requests').get(getSubscriptionRequests);

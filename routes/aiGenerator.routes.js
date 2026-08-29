@@ -9,7 +9,7 @@ const tenantContext = require('../middleware/tenantContext');
 const planGate = require('../middleware/planGate');
 
 // All generator routes require auth + tenant + premium plan
-router.use(protect, tenantContext, planGate('ai-quiz-generator'));
+router.use(protect, tenantContext, planGate('ai-generators'));
 
 // Teachers and admins can generate content
 router.post('/quiz', authorize('teacher', 'admin', 'principal'), generateQuiz);

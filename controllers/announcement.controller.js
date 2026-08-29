@@ -32,7 +32,19 @@ exports.getAnnouncements = async (req, res, next) => {
 
 exports.createAnnouncement = async (req, res, next) => {
   try {
-    const tenantDb = req.tenantClient;
+    let tenantDb = req.tenantClient;
+    let targetCollegeId = req.collegeId;
+
+    if (req.user?.role === 'superAdmin' && (req.body.targetCollegeId || req.body.college_id)) {
+      targetCollegeId = req.body.targetCollegeId || req.body.college_id;
+      const { getTenantClient, getSystemClient } = require('../config/prismaManager');
+      tenantDb = getTenantClient(targetCollegeId) || getSystemClient();
+    }
+
+    if (!targetCollegeId && req.user?.role !== 'superAdmin') {
+      return res.status(400).json({ success: false, message: 'College ID is required' });
+    }
+
     const userId = req.user?.id || req.user?._id || null;
     const {
       title,
@@ -56,7 +68,7 @@ exports.createAnnouncement = async (req, res, next) => {
 
     const announcement = await tenantDb.announcement.create({
       data: {
-        college_id: req.collegeId,
+        college_id: targetCollegeId || req.user.college_id || 'system',
         title,
         content,
         category: category || 'General',

@@ -3,11 +3,12 @@ const { markAttendance, markBulkAttendance, getAttendance, getAttendanceStats, g
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
+const planGate = require('../middleware/planGate');
 
 // QR Gate Scan — public endpoint for gate scanner device (uses college_id in body)
 router.post('/qr-scan', protect, tenantContext, qrGateScan);
 
-router.use(protect, tenantContext);
+router.use(protect, tenantContext, planGate('attendance'));
 
 // Teacher: read-only attendance view
 router.get('/teacher-view', authorize('teacher'), getTeacherAttendanceView);

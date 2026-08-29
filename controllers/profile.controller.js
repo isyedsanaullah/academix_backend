@@ -2,6 +2,7 @@
 const bcrypt = require('bcryptjs');
 const { getSystemClient } = require('../config/prismaManager');
 const { generateCode, sendVerificationEmail, sendPasswordResetEmail } = require('../utils/emailService');
+const { resolveCollegeFeatures } = require('../config/featureRegistry');
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -80,18 +81,20 @@ exports.getProfile = async (req, res, next) => {
       };
     }
 
-    let planInfo = { plan: 'basic', name: 'Basic' };
+    let planInfo = { plan: 'basic', name: 'Basic', effectiveFeatures: [] };
     if (user.role === 'superAdmin') {
-      planInfo = { plan: 'enterprise', name: 'Enterprise' };
+      planInfo = { plan: 'enterprise', name: 'Enterprise', effectiveFeatures: [] };
     } else if (req.collegeId) {
       const college = await prisma.college.findUnique({
         where: { id: req.collegeId }
       });
       if (college && college.subscription) {
         const sub = college.subscription; // parsed Json
+        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
         planInfo = {
           plan: sub.plan || sub.planId || 'basic',
-          name: sub.planName || sub.plan || 'Basic'
+          name: sub.planName || sub.plan || 'Basic',
+          effectiveFeatures: effectiveKeys
         };
       }
     }

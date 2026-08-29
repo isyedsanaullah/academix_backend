@@ -3,8 +3,9 @@ const { getExams, getExam, createExam, updateExam, deleteExam } = require('../co
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
+const planGate = require('../middleware/planGate');
 
-router.use(protect, tenantContext);
+router.use(protect, tenantContext, planGate('exams-results'));
 
 router.route('/')
   .get(authorize('admin', 'registrar', 'principal', 'teacher', 'student', 'accountant'), getExams)

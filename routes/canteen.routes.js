@@ -3,8 +3,9 @@ const { getTransactions, createTransaction } = require('../controllers/canteen.c
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
+const planGate = require('../middleware/planGate');
 
-router.use(protect, tenantContext);
+router.use(protect, tenantContext, planGate('canteen'));
 
 router.route('/').get(authorize('admin', 'employee'), getTransactions).post(authorize('employee', 'admin'), createTransaction);
 

@@ -1,62 +1,22 @@
 const { getSystemClient } = require('../config/prismaManager');
+const { PLAN_FEATURES, PLAN_LEVEL, normalizePlanId } = require('../config/planConstants');
+const { resolveCollegeFeatures } = require('../config/featureRegistry');
 
 /**
- * Plan Feature Definitions
- * Maps each plan to the features it unlocks.
- * Used by planGate middleware to enforce access control.
- */
-const PLAN_FEATURES = {
-  basic: [
-    'students', 'teachers', 'subjects', 'attendance',
-    'timetable', 'notices', 'exams', 'results',
-    'classes', 'sections', 'sessions', 'announcements',
-    'assignments', 'quizzes', 'certificates'
-  ],
-  standard: [
-    // Includes all basic features
-    'students', 'teachers', 'subjects', 'attendance',
-    'timetable', 'notices', 'exams', 'results',
-    'classes', 'sections', 'sessions', 'announcements',
-    'assignments', 'quizzes', 'certificates',
-    // Standard-only features
-    'entry-system', 'fees', 'analytics', 'reports',
-    'employees', 'visitors', 'canteen', 'advanced'
-  ],
-  premium: [
-    // Includes all standard features
-    'students', 'teachers', 'subjects', 'attendance',
-    'timetable', 'notices', 'exams', 'results',
-    'classes', 'sections', 'sessions', 'announcements',
-    'assignments', 'quizzes', 'certificates',
-    'entry-system', 'fees', 'analytics', 'reports',
-    'employees', 'visitors', 'canteen', 'advanced',
-    // Premium AI features
-    'ai-chat', 'ai-pdf-chat', 'ai-study-assistant',
-    'ai-paper-generator', 'ai-quiz-generator',
-    'ai-assignment-generator', 'ai-notes-generator',
-    'ai-syllabus-generator', 'ai-mcq-generator'
-  ]
-};
-
-/**
- * Plan hierarchy for comparison
- */
-const PLAN_LEVEL = { basic: 0, standard: 1, premium: 2 };
-
-/**
- * Plan Gate Middleware
- * Checks if the college's subscription plan includes the required feature.
- * Super admins bypass all plan checks.
+ * Plan & Feature Gate Middleware
+ * Checks if the college's effective subscription configuration includes the required feature.
+ * Resolves: Plan Baseline -> College Overrides -> Deterministic Dependency Rules.
+ * Super Admins bypass all plan & feature gates globally.
  */
 const planGate = (requiredFeature) => {
   return async (req, res, next) => {
     try {
-      // Super admins bypass plan checks
+      // Super admins bypass all feature gates globally
       if (req.user && req.user.role === 'superAdmin') {
         return next();
       }
 
-      // Get college from tenant context
+      // Extract college ID from tenant context or user session
       const collegeId = req.collegeId || req.user?.college_id;
       if (!collegeId) {
         return res.status(403).json({
@@ -78,7 +38,7 @@ const planGate = (requiredFeature) => {
         });
       }
 
-      // Check if college is active
+      // Check if college account is active
       if (!college.isActive) {
         return res.status(403).json({
           success: false,
@@ -86,7 +46,9 @@ const planGate = (requiredFeature) => {
         });
       }
 
-      const subscription = college.subscription || {};
+      const subscription = (typeof college.subscription === 'object' && college.subscription !== null)
+        ? college.subscription
+        : {};
 
       // Check subscription status
       if (subscription.status === 'suspended') {
@@ -103,23 +65,25 @@ const planGate = (requiredFeature) => {
         });
       }
 
-      // Check if plan includes the required feature
-      const plan = subscription.plan || 'basic';
-      const allowedFeatures = PLAN_FEATURES[plan] || PLAN_FEATURES.basic;
+      // Resolve effective features dynamically
+      const plan = normalizePlanId(subscription.plan);
+      const featureOverrides = subscription.featureOverrides || {};
+      const resolved = resolveCollegeFeatures(plan, featureOverrides);
 
-      if (!allowedFeatures.includes(requiredFeature)) {
+      // Check if the required feature is effectively enabled
+      if (!resolved.effectiveKeys.includes(requiredFeature)) {
         return res.status(403).json({
           success: false,
-          message: `This feature requires a higher subscription plan. Current plan: ${plan.toUpperCase()}`,
-          requiredFeature,
-          currentPlan: plan,
-          upgrade: true
+          message: `This feature is disabled for your institution.`,
+          feature: requiredFeature,
+          disabled: true,
+          currentPlan: plan
         });
       }
 
-      // Attach plan info to request for downstream use
+      // Attach resolved plan & effective features to request for downstream handlers
       req.collegePlan = plan;
-      req.planFeatures = allowedFeatures;
+      req.effectiveFeatures = resolved.effectiveKeys;
       next();
     } catch (error) {
       next(error);
@@ -160,7 +124,7 @@ planGate.minPlan = (minPlan) => {
       }
 
       const subscription = college.subscription || {};
-      const plan = subscription.plan || 'basic';
+      const plan = normalizePlanId(subscription.plan);
       const required = PLAN_LEVEL[minPlan] || 0;
       const current = PLAN_LEVEL[plan] || 0;
 
@@ -170,6 +134,7 @@ planGate.minPlan = (minPlan) => {
           message: `This feature requires at least the ${minPlan.toUpperCase()} plan. Current: ${plan.toUpperCase()}`,
           currentPlan: plan,
           requiredPlan: minPlan,
+          disabled: true,
           upgrade: true
         });
       }
@@ -182,7 +147,6 @@ planGate.minPlan = (minPlan) => {
   };
 };
 
-// Export features map for use in frontend/seeder
 planGate.PLAN_FEATURES = PLAN_FEATURES;
 planGate.PLAN_LEVEL = PLAN_LEVEL;
 

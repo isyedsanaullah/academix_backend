@@ -3,8 +3,9 @@ const { getEmployees, getEmployee, createEmployee, updateEmployee, recordSalary,
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
+const planGate = require('../middleware/planGate');
 
-router.use(protect, tenantContext);
+router.use(protect, tenantContext, planGate('employees'));
 router.route('/').get(authorize('admin', 'principal'), getEmployees).post(authorize('admin'), createEmployee);
 router.route('/:id').get(authorize('admin', 'principal'), getEmployee).put(authorize('admin'), updateEmployee);
 router.post('/:id/salary', authorize('admin'), recordSalary);

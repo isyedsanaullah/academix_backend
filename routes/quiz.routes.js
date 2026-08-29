@@ -21,8 +21,9 @@ const {
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
+const planGate = require('../middleware/planGate');
 
-router.use(protect, tenantContext);
+router.use(protect, tenantContext, planGate('assignments-quizzes'));
 
 // Base Quizzes Route
 router.route('/')

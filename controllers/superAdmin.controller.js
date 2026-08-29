@@ -1,5 +1,7 @@
 const { getSystemClient } = require('../config/prismaManager');
 const planGate = require('../middleware/planGate');
+const { resolveCollegeFeatures, FEATURE_REGISTRY } = require('../config/featureRegistry');
+const { logActivity } = require('../services/activityLog.service');
 
 // @desc    Get global dashboard stats
 // @route   GET /api/super-admin/dashboard
@@ -275,6 +277,14 @@ exports.getCollege = async (req, res, next) => {
       })
     ]);
 
+    // Resolve feature access matrix dynamically
+    const subscription = (typeof college.subscription === 'object' && college.subscription !== null)
+      ? college.subscription
+      : {};
+    const plan = subscription.plan || 'basic';
+    const featureOverrides = subscription.featureOverrides || {};
+    const features = resolveCollegeFeatures(plan, featureOverrides);
+
     res.json({
       success: true,
       data: {
@@ -284,7 +294,90 @@ exports.getCollege = async (req, res, next) => {
           totalStudents,
           totalStaff,
           totalFeeCollected: 0
+        },
+        features
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// @desc    Update college-specific feature overrides
+// @route   PUT /api/super-admin/colleges/:id/features
+// @access  Private (superAdmin)
+exports.updateCollegeFeatures = async (req, res, next) => {
+  try {
+    const prisma = getSystemClient();
+    const { id } = req.params;
+    const { overrides } = req.body;
+
+    const college = await prisma.college.findUnique({
+      where: { id }
+    });
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    const currentSub = (typeof college.subscription === 'object' && college.subscription !== null)
+      ? college.subscription
+      : {};
+
+    // Sanitize overrides: only keep valid registry keys with explicit boolean values
+    const cleanOverrides = {};
+    if (overrides && typeof overrides === 'object') {
+      const validKeys = new Set(FEATURE_REGISTRY.map(f => f.key));
+      for (const [key, val] of Object.entries(overrides)) {
+        if (validKeys.has(key)) {
+          if (val === true || val === false) {
+            cleanOverrides[key] = val;
+          }
         }
+      }
+    }
+
+    const updatedSub = {
+      ...currentSub,
+      featureOverrides: cleanOverrides
+    };
+
+    const updatedCollege = await prisma.college.update({
+      where: { id },
+      data: {
+        subscription: updatedSub
+      }
+    });
+
+    const plan = updatedSub.plan || 'basic';
+    const features = resolveCollegeFeatures(plan, cleanOverrides);
+
+    // Log Activity
+    try {
+      logActivity({
+        college_id: college.id,
+        actorUser: req.user,
+        action: 'UPDATE_FEATURES',
+        category: 'College',
+        resourceType: 'College',
+        resourceId: college.id,
+        title: `Updated Feature Overrides for ${college.name}`,
+        description: `Super Admin updated feature overrides for ${college.name}. Effective active features: ${features.effectiveKeys.length}`,
+        metadata: {
+          overrides: cleanOverrides,
+          effectiveCount: features.effectiveKeys.length
+        }
+      });
+    } catch (logErr) {
+      console.error('Feature update activity log error:', logErr.message);
+    }
+
+    res.json({
+      success: true,
+      message: 'Feature overrides updated successfully',
+      data: {
+        ...updatedCollege,
+        _id: updatedCollege.id,
+        features
       }
     });
   } catch (error) {

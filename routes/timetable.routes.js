@@ -3,8 +3,9 @@ const { getTimetables, getMyTimetable, getTeacherTimetable, createTimetable, bul
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
+const planGate = require('../middleware/planGate');
 
-router.use(protect, tenantContext);
+router.use(protect, tenantContext, planGate('timetable'));
 
 // Student self-service (before /:id)
 router.get('/my', authorize('student'), getMyTimetable);

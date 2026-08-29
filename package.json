@@ -1,6 +1,6 @@
 {
   "name": "academix-backend",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Academix - Multi-Tenant Smart E-Services Management System Backend",
   "main": "server.js",
   "scripts": {

@@ -4,6 +4,7 @@ const { verifyFirebaseToken } = require('../config/firebaseAdmin');
 const { getSystemClient } = require('../config/prismaManager');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
+const { resolveCollegeFeatures } = require('../config/featureRegistry');
 
 // @desc    Register a new user
 
@@ -124,10 +125,13 @@ exports.login = async (req, res, next) => {
     if (user.college_id) {
       college = await prisma.college.findUnique({
         where: { id: user.college_id },
-        select: { id: true, name: true, code: true, logo: true }
+        select: { id: true, name: true, code: true, logo: true, subscription: true }
       });
       if (college) {
-        college._id = college.id; // Compatibility mapping
+        college._id = college.id;
+        const sub = (typeof college.subscription === 'object' && college.subscription !== null) ? college.subscription : {};
+        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
+        college.effectiveFeatures = effectiveKeys;
       }
     }
 
@@ -214,10 +218,13 @@ exports.googleLogin = async (req, res, next) => {
     if (updatedUser.college_id) {
       college = await prisma.college.findUnique({
         where: { id: updatedUser.college_id },
-        select: { id: true, name: true, code: true, logo: true }
+        select: { id: true, name: true, code: true, logo: true, subscription: true }
       });
       if (college) {
         college._id = college.id;
+        const sub = (typeof college.subscription === 'object' && college.subscription !== null) ? college.subscription : {};
+        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
+        college.effectiveFeatures = effectiveKeys;
       }
     }
 
@@ -269,6 +276,9 @@ exports.getMe = async (req, res, next) => {
       });
       if (college) {
         college._id = college.id;
+        const sub = (typeof college.subscription === 'object' && college.subscription !== null) ? college.subscription : {};
+        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
+        college.effectiveFeatures = effectiveKeys;
       }
     }
 
