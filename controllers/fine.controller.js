@@ -42,8 +42,12 @@ exports.createFine = async (req, res, next) => {
 exports.getMyIssuedFines = async (req, res, next) => {
   try {
     const tenantDb = req.tenantClient;
+    const where = { college_id: req.collegeId };
+    if (req.user.role !== 'admin') {
+      where.teacher_id = req.user._id;
+    }
     const fines = await tenantDb.fine.findMany({
-      where: { college_id: req.collegeId, teacher_id: req.user._id },
+      where,
       orderBy: { createdAt: 'desc' }
     });
     res.json({ success: true, data: fines.map(f => ({ ...f, _id: f.id })) });

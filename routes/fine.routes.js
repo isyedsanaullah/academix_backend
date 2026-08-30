@@ -9,8 +9,8 @@ router.use(protect, tenantContext);
 // Student: view own fines
 router.get('/my', authorize('student'), getMyFines);
 
-// Teacher: create fine + view issued fines
-router.get('/issued', authorize('teacher'), getMyIssuedFines);
+// Teacher & Admin: create fine + view issued fines
+router.get('/issued', authorize('teacher', 'admin'), getMyIssuedFines);
 router.post('/', authorize('teacher', 'admin'), createFine);
 
 // Admin: view all + update status
