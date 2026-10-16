@@ -1,5 +1,6 @@
 const { getSystemClient } = require('../config/prismaManager');
 const { generateCardId } = require('../utils/cardIdGenerator');
+const { resolveFileUrl } = require('../services/fileResolver');
 
 // Helper
 const getCurrentSessionId = async (tenantDb, collegeId) => {
@@ -48,9 +49,10 @@ exports.getStudents = async (req, res, next) => {
       take: limitNum
     });
 
-    const formatted = students.map(s => ({
-      ...s,
-      _id: s.id
+    // Resolve R2 photo references
+    const formatted = await Promise.all(students.map(async (s) => {
+      const resolvedPhoto = s.photo ? await resolveFileUrl(s.photo, tenantDb, req.collegeId) : s.photo;
+      return { ...s, _id: s.id, photo: resolvedPhoto || s.photo };
     }));
 
     res.json({
@@ -72,8 +74,9 @@ exports.getStudent = async (req, res, next) => {
       where: { id: req.params.id, college_id: req.collegeId }
     });
     if (!student) return res.status(404).json({ success: false, message: 'Student not found' });
-    
-    res.json({ success: true, data: { ...student, _id: student.id } });
+
+    const resolvedPhoto = student.photo ? await resolveFileUrl(student.photo, tenantDb, req.collegeId) : student.photo;
+    res.json({ success: true, data: { ...student, _id: student.id, photo: resolvedPhoto || student.photo } });
   } catch (error) { next(error); }
 };
 

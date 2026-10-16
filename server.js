@@ -10,6 +10,7 @@ const { getSystemClient } = require('./config/prismaManager');
 const { recoverStuckJobs } = require('./services/queueRecoveryService');
 const { initAnnouncementScheduler } = require('./services/announcementScheduler');
 const { initTrashCleanupScheduler } = require('./services/trashCleanupScheduler');
+const { initFileCleanupScheduler } = require('./services/fileCleanupScheduler');
 const errorHandler = require('./middleware/errorHandler');
 
 // Load env vars
@@ -22,6 +23,7 @@ try {
   recoverStuckJobs().catch(e => console.error('Startup queue recovery error:', e.message));
   initAnnouncementScheduler();
   initTrashCleanupScheduler();
+  initFileCleanupScheduler();
 } catch (err) {
   console.error('❌ Failed to connect to PostgreSQL database on startup:', err.message);
 }
@@ -136,6 +138,7 @@ app.use('/api/profile', require('./routes/profile.routes'));
 app.use('/api/analytics', require('./routes/analytics.routes'));
 app.use('/api/approvals', require('./routes/approval.routes'));
 app.use('/api/evaluations', require('./routes/evaluation.routes'));
+app.use('/api/files', require('./routes/files.routes'));
 
 // Static files (uploads)
 app.use('/uploads', express.static('uploads'));

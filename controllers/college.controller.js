@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { getSystemClient } = require('../config/prismaManager');
+const { resolveFileUrl } = require('../services/fileResolver');
 
 exports.getCollegeInfo = async (req, res, next) => {
   try {
@@ -29,6 +30,9 @@ exports.getCollegeInfo = async (req, res, next) => {
       _id: c.id
     }));
 
+    // Resolve R2 reference for logo
+    const resolvedLogo = await resolveFileUrl(college.logo, req.tenantClient || prisma, req.collegeId);
+
     res.json({
       success: true,
       data: {
@@ -39,7 +43,7 @@ exports.getCollegeInfo = async (req, res, next) => {
         address: college.address,
         city: college.city,
         website: college.website,
-        logo: college.logo,
+        logo: resolvedLogo || college.logo,
         subscription: { plan: college.subscription?.plan },
         contacts: formattedContacts
       }
@@ -158,13 +162,16 @@ exports.getDashboard = async (req, res, next) => {
       count: g._count._all
     }));
 
+    // Resolve R2 logo reference
+    const resolvedLogo = await resolveFileUrl(college.logo, tenantClient, collegeId);
+
     res.json({
       success: true,
       data: {
         college: {
           name: college.name,
           code: college.code,
-          logo: college.logo,
+          logo: resolvedLogo || college.logo,
           subscription: college.subscription,
           settings: college.settings
         },

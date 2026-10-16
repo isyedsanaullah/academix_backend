@@ -22,8 +22,9 @@ const parsePDFBuffer = async (buffer, options = {}) => {
 const { processPDF } = require('../services/pdfProcessor');
 const { addDocumentChunks, deleteDocumentChunks } = require('../services/vectorStore');
 const { getDecryptedKey } = require('./aiApiKey.controller');
-const { supabase, supabaseBucket } = require('../config/supabase');
 const { getSystemClient } = require('../config/prismaManager');
+const { uploadObject, deleteObject, getPresignedDownloadUrl, generateObjectKey } = require('../services/storageService');
+const { isR2Configured } = require('../config/r2');
 
 /**
  * Background PDF processing worker function
@@ -47,18 +48,23 @@ const runBackgroundPDFProcessing = async ({ doc, filePath, collegeId, userId, su
       return;
     }
 
-    // Upload to Supabase Storage if configured
-    if (supabase) {
+    // Upload to R2 if configured
+    if (isR2Configured()) {
       try {
         const fileBuffer = fs.readFileSync(filePath);
-        await supabase.storage
-          .from(supabaseBucket)
-          .upload(`${collegeId}/${doc.filename}`, fileBuffer, {
-            contentType: 'application/pdf',
-            upsert: true
-          });
+        const objectKey = generateObjectKey(collegeId, 'documents', doc.id, doc.originalName);
+        await uploadObject({
+          objectKey,
+          body: fileBuffer,
+          contentType: 'application/pdf',
+        });
+        // Store the R2 object key on the document record for download
+        await tenantDb.pDFDocument.update({
+          where: { id: doc.id },
+          data: { chromaCollectionId: `r2:${objectKey}` }, // Reuse field for R2 key
+        });
       } catch (uploadError) {
-        console.error('Supabase Storage sync failed:', uploadError.message);
+        console.error('R2 Storage upload failed:', uploadError.message);
       }
     }
 
@@ -372,10 +378,15 @@ exports.deleteDocument = async (req, res, next) => {
       try { fs.unlinkSync(filePath); } catch (e) {}
     }
 
-    if (supabase) {
+    // Delete R2 object if stored there
+    const r2Key = doc.chromaCollectionId && doc.chromaCollectionId.startsWith('r2:') 
+      ? doc.chromaCollectionId.slice(3) : null;
+    if (r2Key && isR2Configured()) {
       try {
-        await supabase.storage.from(supabaseBucket).remove([`${doc.collegeId}/${doc.filename}`]);
-      } catch (e) {}
+        await deleteObject(r2Key);
+      } catch (e) {
+        console.error('R2 deletion failed:', e.message);
+      }
     }
 
     await tenantDb.$transaction(async (tx) => {
@@ -404,6 +415,24 @@ exports.downloadDocument = async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Access denied to document from another institution.' });
     }
 
+    // Try R2 presigned URL first, fall back to local file
+    const r2Key = doc.chromaCollectionId && doc.chromaCollectionId.startsWith('r2:') 
+      ? doc.chromaCollectionId.slice(3) : null;
+
+    if (r2Key && isR2Configured()) {
+      try {
+        const url = await getPresignedDownloadUrl({
+          objectKey: r2Key,
+          disposition: `attachment; filename="${encodeURIComponent(doc.originalName)}"`,
+          expiresIn: 300,
+        });
+        return res.json({ success: true, data: { url, filename: doc.originalName } });
+      } catch (r2Err) {
+        console.error('R2 download URL failed, falling back to local:', r2Err.message);
+      }
+    }
+
+    // Fall back to local file
     const filePath = path.resolve(`${process.env.UPLOAD_DIR || './uploads'}/${doc.collegeId}/${doc.filename}`);
     if (!fs.existsSync(filePath)) {
       return res.status(404).json({ success: false, message: 'PDF file not found on server storage.' });

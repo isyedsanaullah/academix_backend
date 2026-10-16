@@ -1118,3 +1118,33 @@ model SubscriptionRequest {
   reviewedBy   String?
 }
 
+/// Central file metadata for all R2-managed uploads.
+/// Every file uploaded through the application gets a record here.
+/// The R2 object key is stored here — presigned URLs are generated on demand.
+model StoredFile {
+  id               String    @id @default(uuid())
+  college_id       String                              // owning tenant
+  uploadedById     String                              // authenticated uploader user ID
+  objectKey        String    @unique                   // R2 object key (e.g. tenants/{id}/...)
+  originalFilename String                              // sanitized display name
+  contentType      String                              // verified MIME type
+  sizeBytes        Int                                 // verified file size
+  checksumSha256   String?                             // optional integrity checksum
+  category         String    @default("general")       // image, document, pdf, attachment, etc.
+  entityType       String?                             // Student, Assignment, Announcement, etc.
+  entityId         String?                             // associated record ID
+  status           String    @default("pending")       // pending, uploading, ready, quarantined, failed, deleting, deleted
+  errorMessage     String?                             // reason for failure/quarantine
+  migratedFrom     String?                             // legacy reference for migration tracking
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  deletedAt        DateTime?
+
+  @@index([college_id, status])
+  @@index([college_id, entityType, entityId])
+  @@index([college_id, category])
+  @@index([college_id, createdAt(sort: Desc)])
+  @@index([status, createdAt])                         // for cleanup jobs
+  @@index([uploadedById])
+}
+

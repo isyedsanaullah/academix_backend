@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { getSystemClient } = require('../config/prismaManager');
 const { generateCode, sendVerificationEmail, sendPasswordResetEmail } = require('../utils/emailService');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
+const { resolveFileUrl } = require('../services/fileResolver');
 
 exports.getProfile = async (req, res, next) => {
   try {
@@ -99,6 +100,10 @@ exports.getProfile = async (req, res, next) => {
       }
     }
 
+    // Resolve R2 file references for avatar and photo
+    const resolvedAvatar = await resolveFileUrl(user.avatar, req.tenantClient || prisma, req.collegeId || user.college_id);
+    const resolvedPhoto = extra.photo ? await resolveFileUrl(extra.photo, req.tenantClient || prisma, req.collegeId || user.college_id) : undefined;
+
     res.json({
       success: true,
       data: {
@@ -109,13 +114,14 @@ exports.getProfile = async (req, res, next) => {
         role: user.role,
         phone: user.phone,
         cnic: user.cnic,
-        avatar: user.avatar,
+        avatar: resolvedAvatar || user.avatar,
         authProvider: user.authProvider || 'local',
         emailVerified: user.emailVerified || false,
         qrCode: user.qrCode || '',
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,
         ...extra,
+        ...(resolvedPhoto !== undefined ? { photo: resolvedPhoto || extra.photo } : {}),
         aiKeyStatus,
         planInfo
       }
