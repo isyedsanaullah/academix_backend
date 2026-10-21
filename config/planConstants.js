@@ -99,23 +99,25 @@ const PLAN_FEATURES = {
 };
 
 const PLAN_LEVEL = {
+  starter: 0,
   basic: 0,
   standard: 1,
-  premium: 2
+  premium: 2,
+  enterprise: 3
 };
 
 /**
  * Normalizes raw plan string to canonical plan ID
  * @param {string} rawPlan - Raw plan value from DB or request
- * @returns {string} - 'basic' | 'standard' | 'premium'
+ * @returns {string} - 'starter' | 'standard' | 'premium' | 'enterprise'
  */
 const normalizePlanId = (rawPlan) => {
-  if (!rawPlan || typeof rawPlan !== 'string') return 'basic';
+  if (!rawPlan || typeof rawPlan !== 'string') return 'starter';
   const clean = rawPlan.toLowerCase().trim();
+  if (clean.startsWith('ent')) return 'enterprise';
   if (clean.startsWith('prem')) return 'premium';
   if (clean.startsWith('stand')) return 'standard';
-  if (clean.startsWith('ent')) return 'premium';
-  return 'basic';
+  return 'starter';
 };
 
 module.exports = {

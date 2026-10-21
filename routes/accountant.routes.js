@@ -20,4 +20,10 @@ router.get('/dues', getDuesReport);
 router.get('/payroll', getPayroll);
 router.post('/pay-salary', paySalary);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Accountant portal operations and dashboard"
+};
+
 module.exports = router;

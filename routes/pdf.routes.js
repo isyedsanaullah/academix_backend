@@ -3,11 +3,11 @@ const { uploadPDF, getDocuments, getSubjects, deleteDocument, retryDocument, dow
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
-const planGate = require('../middleware/planGate');
+const { featureGate } = require('../middleware/loadEntitlements');
 const upload = require('../config/multer');
 
 // All PDF routes require auth + tenant + premium plan
-router.use(protect, tenantContext, planGate('ai-pdf-chat'));
+router.use(protect, tenantContext, featureGate('ai-pdf-chat'));
 
 // Upload PDF (teachers and admins only)
 router.post(
@@ -38,5 +38,10 @@ router.get('/hierarchy', getSubjectHierarchy);
 
 // Delete document
 router.delete('/:id', authorize('teacher', 'admin'), deleteDocument);
+
+
+router.meta = {
+  "feature": "ai-pdf-chat"
+};
 
 module.exports = router;

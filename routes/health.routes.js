@@ -88,4 +88,10 @@ router.get('/', async (req, res) => {
   });
 });
 
+
+router.meta = {
+  "exempt": "system",
+  "reason": "System health check and monitoring endpoints"
+};
+
 module.exports = router;

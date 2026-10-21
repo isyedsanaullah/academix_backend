@@ -3,10 +3,13 @@ const { getOverview, getCollegeAnalytics, getLoginTrends } = require('../control
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 
-router.use(protect, authorize('superAdmin'));
+const { featureGate } = require('../middleware/loadEntitlements');
+
+router.use(protect, authorize('superAdmin'), featureGate('analytics-reports'));
 
 router.get('/overview', getOverview);
 router.get('/colleges', getCollegeAnalytics);
 router.get('/logins', getLoginTrends);
 
+router.meta = { feature: 'analytics-reports' };
 module.exports = router;

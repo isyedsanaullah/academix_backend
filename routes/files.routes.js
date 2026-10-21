@@ -59,4 +59,10 @@ router.get('/', listFiles);
 // Delete file
 router.delete('/:id', deleteFile);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "System file upload and retrieval infrastructure"
+};
+
 module.exports = router;

@@ -10,4 +10,10 @@ router.put('/read-all', markAllRead);
 router.post('/', authorize('admin', 'principal'), createNotification);
 router.route('/:id').put(markAsRead).delete(deleteNotification);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "User notification inbox and dispatch"
+};
+
 module.exports = router;

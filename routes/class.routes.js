@@ -8,4 +8,10 @@ router.use(protect, tenantContext);
 router.route('/').get(authorize('admin', 'principal', 'teacher'), getClasses).post(authorize('admin'), createClass);
 router.route('/:id').put(authorize('admin'), updateClass).delete(authorize('admin'), deleteClass);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Core academic structure: classes"
+};
+
 module.exports = router;

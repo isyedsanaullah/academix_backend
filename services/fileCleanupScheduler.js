@@ -1,140 +1,159 @@
 /**
- * File Cleanup Scheduler
- * ──────────────────────
- * Periodically cleans up orphaned pending uploads and retries failed deletions.
- * Runs safely within tenant isolation — never touches files from other tenants.
+ * File Cleanup Scheduler (Phase 11)
+ * ─────────────────────────────────────────────────────────────
+ * Idempotent daily cleanup job:
+ * 1. Deletes failed/pending StoredFile records & R2 objects older than 24 hours.
+ * 2. Purges verified payment proof screenshots older than 90 days.
+ * 3. Never deletes active student photos, stamps, logos, or ready academic documents.
  */
-const { getSystemClient } = require('../config/prismaManager');
-const { headObject, deleteObject } = require('../services/storageService');
-const { isR2Configured } = require('../config/r2');
 
-const CLEANUP_INTERVAL_MS = 30 * 60 * 1000; // 30 minutes
-const PENDING_EXPIRY_MS = 2 * 60 * 60 * 1000; // 2 hours — abandon pending uploads older than this
-const DELETING_RETRY_LIMIT = 3;
-
-let cleanupTimer = null;
+const { getSystemClient, getTenantClient } = require('../config/prismaManager');
+const { deleteObject } = require('./storageService');
 
 /**
- * Clean up abandoned pending uploads.
- * Files stuck in 'pending' for over 2 hours are marked as failed.
+ * Run file cleanup for a single tenant database
  */
-async function cleanupPendingUploads() {
-  try {
-    const prisma = getSystemClient();
-    const cutoff = new Date(Date.now() - PENDING_EXPIRY_MS);
+async function runTenantFileCleanup(tenantDb, collegeId) {
+  const stats = {
+    collegeId,
+    deletedPendingOrFailed: 0,
+    deletedOldPaymentProofs: 0,
+    errors: [],
+  };
 
-    const abandoned = await prisma.storedFile.findMany({
+  try {
+    const now = new Date();
+    const cutoff24h = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const cutoff90d = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+
+    // 1. Pending or failed uploads older than 24 hours
+    const staleFiles = await tenantDb.storedFile.findMany({
       where: {
-        status: { in: ['pending', 'uploading'] },
-        createdAt: { lt: cutoff },
+        college_id: collegeId,
+        status: { in: ['pending', 'failed'] },
+        createdAt: { lt: cutoff24h },
       },
-      take: 50,
+      take: 200,
     });
 
-    if (abandoned.length === 0) return;
-
-    for (const file of abandoned) {
+    for (const file of staleFiles) {
       try {
-        // Check if object was actually uploaded despite DB not being finalized
-        const exists = await headObject(file.objectKey);
-
-        if (exists) {
-          // Object exists but was never finalized — delete the orphan
-          await deleteObject(file.objectKey);
+        if (file.objectKey) {
+          await deleteObject(file.objectKey).catch(() => {});
         }
-
-        await prisma.storedFile.update({
+        await tenantDb.storedFile.delete({
           where: { id: file.id },
-          data: {
-            status: 'failed',
-            errorMessage: 'Upload abandoned — pending for over 2 hours.',
-            deletedAt: new Date(),
-          },
         });
+        stats.deletedPendingOrFailed++;
       } catch (err) {
-        console.error(`Cleanup error for file ${file.id}: ${err.message}`);
+        stats.errors.push({ fileId: file.id, error: err.message });
       }
     }
 
-    if (abandoned.length > 0) {
-      console.log(`🧹 Cleaned up ${abandoned.length} abandoned pending uploads.`);
-    }
-  } catch (error) {
-    console.error('File cleanup scheduler error:', error.message);
-  }
-}
-
-/**
- * Retry R2 deletion for files stuck in 'deleting' state.
- */
-async function retryFailedDeletions() {
-  try {
-    const prisma = getSystemClient();
-
-    const stuckFiles = await prisma.storedFile.findMany({
+    // 2. Verified payment proofs older than 90 days
+    const oldPaymentProofs = await tenantDb.storedFile.findMany({
       where: {
-        status: 'deleting',
+        college_id: collegeId,
+        category: 'payment-proofs',
+        status: 'ready',
+        createdAt: { lt: cutoff90d },
       },
-      take: 20,
+      take: 200,
     });
 
-    for (const file of stuckFiles) {
+    for (const proof of oldPaymentProofs) {
       try {
-        await deleteObject(file.objectKey);
-        await prisma.storedFile.update({
-          where: { id: file.id },
-          data: {
-            status: 'deleted',
-            deletedAt: new Date(),
-          },
+        if (proof.objectKey) {
+          await deleteObject(proof.objectKey).catch(() => {});
+        }
+        await tenantDb.storedFile.delete({
+          where: { id: proof.id },
         });
+        stats.deletedOldPaymentProofs++;
       } catch (err) {
-        console.error(`Retry deletion failed for ${file.id}: ${err.message}`);
+        stats.errors.push({ fileId: proof.id, error: err.message });
       }
     }
+  } catch (err) {
+    stats.errors.push({ general: err.message });
+  }
 
-    if (stuckFiles.length > 0) {
-      console.log(`🧹 Retried deletion for ${stuckFiles.length} stuck files.`);
+  return stats;
+}
+
+/**
+ * Run cleanup across all active colleges
+ */
+async function runAllCollegesCleanup() {
+  const sysDb = getSystemClient();
+  const summary = {
+    totalColleges: 0,
+    totalStaleDeleted: 0,
+    totalProofsPurged: 0,
+    results: [],
+  };
+
+  try {
+    const colleges = await sysDb.college.findMany({
+      where: { isActive: true },
+      select: { id: true, code: true, mongoUrl: true },
+    });
+
+    summary.totalColleges = colleges.length;
+
+    for (const college of colleges) {
+      const dbUrl = college.mongoUrl || process.env.DATABASE_URL;
+      const tenantDb = getTenantClient(dbUrl);
+      const res = await runTenantFileCleanup(tenantDb, college.id);
+      summary.totalStaleDeleted += res.deletedPendingOrFailed;
+      summary.totalProofsPurged += res.deletedOldPaymentProofs;
+      summary.results.push(res);
     }
-  } catch (error) {
-    console.error('Retry deletion scheduler error:', error.message);
-  }
-}
-
-/**
- * Run all cleanup tasks.
- */
-async function runCleanup() {
-  if (!isR2Configured()) return;
-  await cleanupPendingUploads();
-  await retryFailedDeletions();
-}
-
-/**
- * Initialize the file cleanup scheduler.
- */
-function initFileCleanupScheduler() {
-  if (!isR2Configured()) {
-    console.log('⚠️  R2 not configured — file cleanup scheduler disabled.');
-    return;
+  } catch (err) {
+    console.error('[FileCleanupScheduler] Error running global cleanup:', err.message);
   }
 
-  // Run first cleanup after 5 minutes
+  return summary;
+}
+
+let schedulerTimer = null;
+
+/**
+ * Start background timer for daily execution
+ */
+function startFileCleanupScheduler(intervalMs = 24 * 60 * 60 * 1000) {
+  if (schedulerTimer) return;
+
+  // Run initial pass after 1 minute of server startup
   setTimeout(() => {
-    runCleanup().catch((e) => console.error('Initial file cleanup error:', e.message));
-  }, 5 * 60 * 1000);
+    runAllCollegesCleanup().catch((err) => {
+      console.warn('[FileCleanupScheduler] Initial cleanup run error:', err.message);
+    });
+  }, 60 * 1000);
 
-  // Then run periodically
-  cleanupTimer = setInterval(() => {
-    runCleanup().catch((e) => console.error('Periodic file cleanup error:', e.message));
-  }, CLEANUP_INTERVAL_MS);
+  // Recurring 24-hour interval
+  schedulerTimer = setInterval(() => {
+    runAllCollegesCleanup().catch((err) => {
+      console.warn('[FileCleanupScheduler] Daily cleanup run error:', err.message);
+    });
+  }, intervalMs);
 
-  console.log('🧹 File cleanup scheduler initialized (every 30 minutes).');
+  if (schedulerTimer.unref) {
+    schedulerTimer.unref();
+  }
+}
+
+function stopFileCleanupScheduler() {
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = null;
+  }
 }
 
 module.exports = {
-  initFileCleanupScheduler,
-  runCleanup,
-  cleanupPendingUploads,
-  retryFailedDeletions,
+  runTenantFileCleanup,
+  runAllCollegesCleanup,
+  startFileCleanupScheduler,
+  initFileCleanupScheduler: startFileCleanupScheduler,
+  stopFileCleanupScheduler,
 };

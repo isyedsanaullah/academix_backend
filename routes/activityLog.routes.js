@@ -13,4 +13,10 @@ router.use(protect, tenantContext);
 // GET /api/activity-logs - Retrieve role-scoped activity logs
 router.get('/', getActivities);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Audit and activity logs for tenant administration"
+};
+
 module.exports = router;

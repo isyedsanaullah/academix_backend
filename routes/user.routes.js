@@ -24,4 +24,10 @@ router.delete('/:id', authorize('admin'), deleteUser);
 router.post('/:id/status', authorize('admin'), applyUserStatus);
 router.post('/:id/undo-status', authorize('admin'), undoUserStatus);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Core identity and user management"
+};
+
 module.exports = router;

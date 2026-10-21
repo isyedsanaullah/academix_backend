@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { getSystemClient } = require('../config/prismaManager');
 const { generateCode, sendVerificationEmail, sendPasswordResetEmail } = require('../utils/emailService');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
+const { getEntitlements } = require('../middleware/loadEntitlements');
 const { resolveFileUrl } = require('../services/fileResolver');
 
 exports.getProfile = async (req, res, next) => {
@@ -82,7 +83,7 @@ exports.getProfile = async (req, res, next) => {
       };
     }
 
-    let planInfo = { plan: 'basic', name: 'Basic', effectiveFeatures: [] };
+    let planInfo = { plan: 'starter', name: 'Starter', effectiveFeatures: [] };
     if (user.role === 'superAdmin') {
       planInfo = { plan: 'enterprise', name: 'Enterprise', effectiveFeatures: [] };
     } else if (req.collegeId) {
@@ -91,11 +92,11 @@ exports.getProfile = async (req, res, next) => {
       });
       if (college && college.subscription) {
         const sub = college.subscription; // parsed Json
-        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
+        const ent = await getEntitlements(req.collegeId);
         planInfo = {
-          plan: sub.plan || sub.planId || 'basic',
-          name: sub.planName || sub.plan || 'Basic',
-          effectiveFeatures: effectiveKeys
+          plan: ent.planId || sub.plan || sub.planId || 'starter',
+          name: sub.planName || sub.plan || 'Starter',
+          effectiveFeatures: ent.active ? (ent.effectiveFeatures || []) : []
         };
       }
     }

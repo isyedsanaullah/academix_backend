@@ -141,6 +141,14 @@ model Application {
   reviewedBy        String?
   reviewedAt        DateTime?
   remarks           String?
+  source            String?   @default("ONLINE") // ONLINE, DESK
+  enteredBy         String?
+  quota             String?                      // QuotaRule.code
+  equivalenceBoard  String?                      // O-level, A-level, other board
+  equivalenceMarks  Float?                       // IBCC equivalence percent
+  docVerification   Json?                        // { sscDMC: { ok:true, by, at }, cnic: {...}, photo: {...} }
+  scholarshipTier_id String?
+  meritScore        Float?
   password          String?
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
@@ -217,8 +225,9 @@ model Attendance {
   entryTime  DateTime?
   exitTime   DateTime?
   markedBy   String?
-  remarks    String?
-  createdAt  DateTime  @default(now())
+  remarks           String?
+  correctionReason  String?
+  createdAt         DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
 
   @@unique([college_id, session_id, student_id, date])
@@ -311,6 +320,8 @@ model Certificate {
   student_id           String
   type                 String // character, hope, migration, bonafide
   certificateNumber    String    @unique
+  verifyToken          String?   @unique
+  templateVersion      Int?      @default(1)
   issueDate            DateTime?
   content              String?
   predictedPerformance String?
@@ -358,6 +369,8 @@ model Group {
   college_id String
   class_id   String // References Class.id (Part)
   name       String // e.g. "Computer Science", "Pre-Medical"
+  seats      Int?
+  feeNote    String?
   isActive   Boolean? @default(true)
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
@@ -491,7 +504,7 @@ model Exam {
   college_id   String
   session_id   String
   name         String
-  type         String // mid, final, test, practical
+  type         String // mid, final, test, practical, send_up
   class        String // FSC Part 1, FSC Part 2, Both
   group        String? // Pre-Medical, Pre-Engineering, Computer Science, all
   section      String?
@@ -528,6 +541,7 @@ model Fee {
   paidDate             DateTime?
   receiptNumber        String?
   challanNumber        String?
+  verifyToken          String?   @unique
   dueDate              DateTime?
   enteredBy            String?
   remarks              String?
@@ -636,10 +650,13 @@ model Payment {
   student_id      String
   idempotencyKey  String?  @unique
   amount          Decimal  @db.Decimal(12, 2)
-  paymentMethod   String?  // cash, bank, online, cheque
+  paymentMethod   String?  // cash, bank, online, cheque, easypaisa, jazzcash, raast
   receiptNumber   String   @unique
   referenceNumber String?
+  verifyToken     String?  @unique
   receivedBy      String?
+  verifiedBy      String?
+  signedBy        String?
   remarks         String?
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -647,6 +664,153 @@ model Payment {
   @@index([college_id, student_id])
   @@index([college_id, fee_id])
   @@index([receiptNumber])
+}
+
+model PaymentProof {                   // student uploads an EasyPaisa / JazzCash / bank screenshot for a voucher
+  id            String    @id @default(uuid())
+  college_id    String
+  student_id    String
+  fee_id        String
+  method        String                 // easypaisa, jazzcash, bank, raast, other
+  amount        Decimal   @db.Decimal(12, 2)
+  transactionId String                 // typed by the student; unique per college so one payment cannot pay two vouchers
+  senderName    String?
+  senderPhone   String?
+  paidOn        DateTime?
+  file_id       String                 // StoredFile.id of the screenshot (compressed)
+  status        String?   @default("pending") // pending, verified, rejected, duplicate
+  rejectReason  String?
+  verifiedBy    String?
+  verifiedAt    DateTime?
+  payment_id    String?                // Payment.id created on verification
+  ocrData       Json?                  // filled only by ai-payment-ocr
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([college_id, transactionId])
+  @@index([college_id, status, createdAt(sort: Desc)])
+  @@index([college_id, student_id])
+}
+
+model TimetableSubstitution {          // one row per period handed to a substitute, never the whole day to one person
+  id                   String   @id @default(uuid())
+  college_id           String
+  session_id           String?
+  date                 DateTime
+  slotKey              String             // the timetable period identifier used by the existing timetable (section + day + period)
+  section_id           String?
+  class                String?
+  section              String?
+  periodNumber         Int?
+  subject_id           String?
+  absentTeacher_id     String
+  substituteTeacher_id String
+  reason               String?            // leave, sick, official duty, other
+  status               String?  @default("assigned") // assigned, done, cancelled
+  assignedBy           String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([college_id, date, slotKey])
+  @@index([college_id, date, substituteTeacher_id])
+  @@index([college_id, date, absentTeacher_id])
+}
+
+model TeacherSubject {                 // a teacher can teach several subjects in several classes and groups
+  id               String   @id @default(uuid())
+  college_id       String
+  teacher_id       String
+  subject_id       String
+  class            String?                  // FSC Part 1, FSC Part 2, Both
+  group            String?
+  isPrimary        Boolean? @default(false)
+  maxPeriodsPerDay Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@unique([college_id, teacher_id, subject_id, class, group])
+  @@index([college_id, teacher_id])
+  @@index([college_id, subject_id])
+}
+
+model TimetableConstraint {            // input for the generator: rooms, teacher availability, subject load
+  id         String   @id @default(uuid())
+  college_id String
+  session_id String?
+  kind       String                    // teacher_unavailable, room, subject_load, no_double_period, fixed_slot
+  teacher_id String?
+  subject_id String?
+  section_id String?
+  data       Json                      // { day, period, room, periodsPerWeek ... }
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, session_id, kind])
+}
+
+model TimetableDraft {                 // generated draft before applying to live timetable
+  id               String   @id @default(uuid())
+  college_id       String
+  session_id       String?
+  name             String?  @default("Draft Timetable")
+  hardScore        Int      @default(0)   // 0 = no hard violations
+  softScore        Int      @default(0)
+  unplacedPeriods  Json?    // array of unplaced period requests with reasons
+  clashes          Json?    // list of clashes or hard violations if any
+  grid             Json     // the generated periods grouped by section/day
+  options          Json?    // generation options (periodsPerDay, days, etc.)
+  status           String?  @default("draft") // draft, applied, discarded
+  appliedAt        DateTime?
+  appliedBy        String?
+  createdBy        String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([college_id, session_id, status])
+}
+
+model PlatformInvoice {
+  id            String    @id @default(uuid())
+  college_id    String
+  invoiceNo     String    @unique
+  planId        String?
+  periodStart   DateTime
+  periodEnd     DateTime
+  amount        Decimal   @db.Decimal(12, 2)
+  status        String?   @default("unpaid") // unpaid, paid, void
+  paidAt        DateTime?
+  method        String?                // bank, easypaisa, jazzcash, cash
+  reference     String?
+  proof_file_id String?                // StoredFile.id of the college's payment screenshot
+  verifyToken   String    @unique      // random, used by the public verify page
+  verifiedBy    String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([college_id, status])
+}
+
+model VerifyToken {
+  token      String   @id
+  college_id String
+  kind       String   // certificate, voucher, receipt, invoice
+  ref_id     String
+  createdAt  DateTime @default(now())
+
+  @@index([college_id, kind])
+  @@index([ref_id])
+}
+
+model VerifyLog {
+  id          String   @id @default(uuid())
+  tokenPrefix String
+  ipHash      String
+  userAgent   String?
+  status      String   // VERIFIED, NOT_FOUND, DISABLED, RATE_LIMITED
+  createdAt   DateTime @default(now())
+
+  @@index([tokenPrefix, createdAt])
+  @@index([ipHash, createdAt])
 }
 
 model PaySlip {
@@ -856,6 +1020,7 @@ model Session {
   startDate  DateTime
   endDate    DateTime
   isCurrent  Boolean? @default(false)
+  batch_id   String?  // References Batch.id
   status     String?  @default("upcoming") // active, completed, upcoming
   createdBy  String?
   createdAt  DateTime @default(now())
@@ -895,9 +1060,14 @@ model Student {
   faceData           String?   @default("")
   qrCode             String?   @default("")
   photo              String?   @default("")
+  photoThumb         String?
   documents          Json?
   status             String?   @default("active") // active, graduated, dropped, suspended, promoted
   canteenBalance     Float?    @default(0)
+  batch_id           String?   // References Batch.id
+  application_id     String?   // Application.id it was enrolled from
+  quota              String?   // Quota code e.g. "open_merit", "sports"
+  candidateType      String?   @default("regular") // regular, private, improvement
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -946,18 +1116,23 @@ model Subject {
 }
 
 model Subscription {
-  id           String   @id @default(uuid())
-  planId       String   @unique // basic, standard, premium
-  name         String
-  description  String?
-  features     String[]
-  restrictions String[]
-  limits       Json?
-  price        Json?
-  isAI         Boolean? @default(false)
-  isActive     Boolean? @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  id             String   @id @default(uuid())
+  planId         String   @unique // basic, standard, premium
+  name           String
+  description    String?
+  features       String[]
+  restrictions   String[]
+  limits         Json?
+  price          Json?
+  isAI           Boolean? @default(false)
+  isActive       Boolean? @default(true)
+  kind           String?  @default("standard")
+  ownerCollegeId String?
+  version        Int?     @default(1)
+  planStatus     String?  @default("active")
+  roles          String[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 }
 
 model Teacher {
@@ -1146,5 +1321,634 @@ model StoredFile {
   @@index([college_id, createdAt(sort: Desc)])
   @@index([status, createdAt])                         // for cleanup jobs
   @@index([uploadedById])
+}
+
+// ======================= PART A: platform =======================
+
+model FeatureFlag {                    // release stage and kill switch only; the catalog itself stays in code
+  key          String   @id           // "board-registration"
+  release      String   @default("HIDDEN")   // HIDDEN, BETA, GA, DEPRECATED
+  killSwitch   Boolean  @default(false)
+  betaColleges String[]
+  updatedBy    String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model CollegeUsage {                   // atomic quota counters (see services/quota.js in the entitlement document)
+  id         String   @id @default(uuid())
+  college_id String
+  metric     String                    // students, staff, storageBytes, applications, aiTokens, smsCredits, waCredits
+  period     String   @default("total") // total, 2026, 2026-10
+  value      BigInt   @default(0)
+  updatedAt  DateTime @updatedAt
+
+  @@unique([college_id, metric, period])
+}
+
+model CollegeEntitlementAudit {
+  id          String   @id @default(uuid())
+  college_id  String
+  actorUserId String
+  actorEmail  String?
+  action      String                   // OVERRIDE_ON, OVERRIDE_OFF, RESET, PLAN_CHANGE, CUSTOM_PLAN_SAVE, KILL_SWITCH, QUOTA_EDIT, METHOD_PREF, SERVICE_CHOICE
+  featureKey  String?
+  previousVal String?
+  newVal      String?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@index([college_id, createdAt(sort: Desc)])
+  @@index([featureKey])
+}
+
+model FallbackEvent {                  // how often Plan B was used; drives the usage page and upgrade prompts
+  id         String   @id @default(uuid())
+  college_id String
+  capability String                    // student.identify, attendance.mark ...
+  method     String                    // search, manual, print ...
+  userId     String?
+  role       String?
+  meta       Json?
+  createdAt  DateTime @default(now())
+
+  @@index([college_id, capability, createdAt(sort: Desc)])
+}
+
+// ======================= PART B: tenant tables (Phase 5) =======================
+
+model GroupSubject {                   // subject combinations: which subjects a group takes, and which are compulsory or elective
+  id          String   @id @default(uuid())
+  college_id  String
+  group_id    String                   // Group.id
+  subject_id  String                   // Subject.id
+  kind        String   @default("compulsory") // compulsory, elective, optional
+  electiveSet String?                  // "science-elective": the student picks maxChoices from the same set
+  maxChoices  Int?
+  isActive    Boolean? @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([college_id, group_id, subject_id])
+  @@index([college_id, group_id])
+}
+
+model StudentSubject {                 // what each student actually takes (Student.subjects String[] stays for old screens)
+  id         String   @id @default(uuid())
+  college_id String
+  session_id String
+  student_id String
+  subject_id String
+  kind       String   @default("compulsory") // compulsory, elective, optional
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([college_id, session_id, student_id, subject_id])
+  @@index([college_id, session_id, subject_id])
+}
+
+model CombinedClass {                  // English, Urdu, Islamiat taught to several sections together
+  id         String   @id @default(uuid())
+  college_id String
+  session_id String
+  subject_id String
+  name       String                    // "English Part 1, Pre-Med + ICS"
+  sectionIds String[]                  // Section.id list
+  teacher_id String?
+  isActive   Boolean? @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, session_id, subject_id])
+}
+
+model Batch {                          // two-year batch, e.g. 2026-28. Session stays one academic year.
+  id         String   @id @default(uuid())
+  college_id String
+  name       String                    // "2026-28"
+  startYear  Int
+  endYear    Int
+  status     String?  @default("active") // active, completed
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([college_id, name])
+}
+
+model StudentPromotion {               // 1st year to 2nd year, with the old and new rows kept
+  id            String   @id @default(uuid())
+  college_id    String
+  student_id    String
+  from_session  String
+  to_session    String
+  fromClass     String               // FSC Part 1
+  toClass       String               // FSC Part 2
+  newRollNumber String?
+  decidedBy     String?
+  remarks       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([college_id, student_id])
+  @@index([college_id, to_session])
+}
+
+// ======================= PART B: Board Examinations (Phase 6) =======================
+
+model BoardForm {                      // 1st-year registration form and 2nd-year exam admission form in one table
+  id                   String    @id @default(uuid())
+  college_id           String
+  session_id           String
+  student_id           String
+  kind                 String              // registration, exam_admission
+  candidateType        String?   @default("regular") // regular, private, improvement, compartment
+  board                String              // FBISE Islamabad, BISE Lahore ...
+  boardRollNumber      String?
+  boardRegistrationNo  String?
+  formNumber           String?
+  group                String?
+  subjects             Json?               // subjects as sent to the board
+  fee_id               String?             // Fee.id for the board fee
+  feeAmount            Decimal?  @default(0) @db.Decimal(12, 2)
+  deadline             DateTime?
+  attendancePercent    Float?              // value at the time of the check
+  attendanceOk         Boolean?
+  attendanceOverrideBy String?             // who allowed a shortage, and why in remarks
+  centreName           String?
+  slipIssuedAt         DateTime?
+  status               String?   @default("draft") // draft, ready, submitted, accepted, rejected, withdrawn
+  submittedAt          DateTime?
+  remarks              String?
+  createdBy            String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  @@unique([college_id, session_id, student_id, kind])
+  @@index([college_id, session_id, kind, status])
+  @@index([college_id, boardRollNumber])
+}
+
+model BoardDatesheet {
+  id          String   @id @default(uuid())
+  college_id  String
+  session_id  String
+  board       String
+  examYear    Int
+  examType    String   @default("annual") // annual, supplementary
+  class       String                   // FSC Part 1, FSC Part 2
+  papers      Json                     // [{ subject, date, start, end }]
+  centres     Json?                    // [{ name, address, rollRange }]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, session_id, board, examYear])
+}
+
+model BoardResult {
+  id              String   @id @default(uuid())
+  college_id      String
+  session_id      String
+  student_id      String?              // null when the roll number could not be matched yet
+  board           String
+  examYear        Int
+  examType        String   @default("annual") // annual, supplementary
+  part            Int                  // 1 or 2
+  boardRollNumber String
+  marks           Json?                // [{ subject, theory, practical, total, grade, pass }]
+  totalObtained   Float?
+  totalMarks      Float?
+  percentage      Float?
+  grade           String?
+  position        Int?
+  status          String?              // pass, fail, compartment, withheld, absent
+  gazetteNo       String?
+  source          String   @default("manual") // manual, import
+  import_id       String?              // BoardResultImport.id
+  enteredBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([college_id, board, examYear, examType, part, boardRollNumber])
+  @@index([college_id, student_id])
+  @@index([college_id, examYear, status])
+  @@index([college_id, session_id, board])
+}
+
+model BoardResultImport {
+  id          String   @id @default(uuid())
+  college_id  String
+  file_id     String?                  // StoredFile.id
+  board       String
+  examYear    Int
+  rowsTotal   Int?     @default(0)
+  rowsMatched Int?     @default(0)
+  rowsFailed  Int?     @default(0)
+  status      String?  @default("uploaded") // uploaded, processing, done, failed
+  errors      Json?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, createdAt(sort: Desc)])
+}
+
+model EligibilityRule {
+  id                   String   @id @default(uuid())
+  college_id           String
+  session_id           String
+  forKind              String             // send_up, board_form
+  minAttendancePercent Float?   @default(75)
+  minOverallPercent    Float?
+  maxFailedSubjects    Int?
+  isActive             Boolean? @default(true)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([college_id, session_id, forKind])
+}
+
+model EligibilityRecord {              // a computed snapshot, not a live view, so a later change does not rewrite history
+  id                String   @id @default(uuid())
+  college_id        String
+  session_id        String
+  student_id        String
+  forKind           String             // send_up, board_form
+  exam_id           String?
+  attendancePercent Float?
+  resultPercent     Float?
+  failedSubjects    Int?
+  eligible          Boolean
+  reasons           Json?              // ["attendance 61% < 75%"]
+  overridden        Boolean? @default(false)
+  overriddenBy      String?
+  overrideReason    String?
+  computedAt        DateTime @default(now())
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([college_id, session_id, student_id, forKind])
+  @@index([college_id, session_id, forKind, eligible])
+}
+
+// ---- Practicals and labs (science groups) ----
+model PracticalSession {
+  id         String   @id @default(uuid())
+  college_id String
+  session_id String
+  subject_id String
+  class      String
+  group      String?
+  section    String?
+  batchNo    Int?     @default(1)      // lab batch inside a section
+  date       DateTime
+  startTime  String?
+  endTime    String?
+  labName    String?
+  teacher_id String?
+  status     String?  @default("scheduled") // scheduled, done, cancelled
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, session_id, date])
+  @@index([college_id, session_id, subject_id])
+}
+
+model PracticalMark {
+  id          String   @id @default(uuid())
+  college_id  String
+  session_id  String
+  student_id  String
+  subject_id  String
+  exam_id     String?                  // Exam with type 'practical'
+  practical_id String?                 // PracticalSession.id
+  marks       Float?
+  maxMarks    Float?
+  journalMarks Float?
+  attended    Boolean? @default(true)  // lab attendance
+  enteredBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([college_id, session_id, student_id, subject_id, exam_id])
+  @@index([college_id, session_id, subject_id])
+}
+
+model LabJournal {
+  id           String   @id @default(uuid())
+  college_id   String
+  session_id   String
+  student_id   String
+  subject_id   String
+  required     Int?     @default(0)
+  submitted    Int?     @default(0)
+  checked      Int?     @default(0)
+  remarks      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([college_id, session_id, student_id, subject_id])
+}
+
+model LabStockItem {
+  id          String    @id @default(uuid())
+  college_id  String
+  name        String
+  category    String                  // apparatus, chemical, consumable, equipment
+  subject     String?                 // Physics, Chemistry, Biology, Computer
+  unit        String?
+  quantity    Float     @default(0)
+  minQuantity Float?    @default(0)
+  location    String?
+  expiryDate  DateTime?
+  isActive    Boolean?  @default(true)
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([college_id, category])
+}
+
+model LabStockMovement {
+  id         String   @id @default(uuid())
+  college_id String
+  item_id    String
+  change     Float                     // + purchase, - use or breakage
+  reason     String                    // purchase, practical, breakage, expiry, adjustment
+  practical_id String?
+  enteredBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, item_id, createdAt(sort: Desc)])
+}
+
+model BoardPracticalExaminer {
+  id          String   @id @default(uuid())
+  college_id  String
+  session_id  String
+  board       String
+  subject_id  String?
+  centreName  String?
+  examDate    DateTime?
+  examinerName String
+  examinerCnic String?
+  examinerType String  @default("external") // internal, external
+  remarks     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, session_id, board])
+}
+
+// ---- Admissions: quotas, equivalence, per-document verification ----
+model QuotaRule {
+  id           String   @id @default(uuid())
+  college_id   String
+  session_id   String
+  code         String                  // hafiz-e-quran, sports, sibling, staff-child, orphan, disabled, other
+  name         String
+  seats        Int?
+  seatsPercent Float?
+  discountType String?  @default("none") // none, percent, fixed
+  discountValue Decimal? @default(0) @db.Decimal(12, 2)
+  isActive     Boolean? @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@unique([college_id, session_id, code])
+}
+
+model ScholarshipTier {                // scholarship by matric marks
+  id           String   @id @default(uuid())
+  college_id   String
+  session_id   String
+  name         String                  // "A+ merit"
+  minPercent   Float
+  maxPercent   Float?
+  discountType String   @default("percent") // percent, fixed
+  discountValue Decimal @default(0) @db.Decimal(12, 2)
+  appliesTo    String[]                // fee types, e.g. ["tuition"]
+  isActive     Boolean? @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([college_id, session_id])
+}
+
+model EnquiryLead {
+  id             String    @id @default(uuid())
+  college_id     String
+  session_id     String?
+  name           String
+  phone          String
+  source         String?             // walk-in, call, facebook, whatsapp, referral
+  preferredGroup String?
+  status         String?   @default("new") // new, contacted, test_scheduled, applied, enrolled, lost
+  testDate       DateTime?
+  followUps      Json?
+  assignedTo     String?
+  application_id String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([college_id, status])
+}
+
+// ---- Fees ----
+model FeeStructure {                   // fee types per group; Fee rows are generated from these
+  id             String   @id @default(uuid())
+  college_id     String
+  session_id     String
+  group_id       String?             // null = all groups
+  class          String?             // FSC Part 1, FSC Part 2, Both
+  feeType        String              // admission, annual, tuition, lab, board, security, library, other
+  amount         Decimal  @db.Decimal(12, 2)
+  dueDate        DateTime?
+  installments   Json?               // [{ no:1, percent:50, dueDate }]
+  lateFeePerDay  Decimal? @default(0) @db.Decimal(12, 2)
+  lateFeeCap     Decimal? @db.Decimal(12, 2)
+  isActive       Boolean? @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([college_id, session_id, group_id])
+}
+
+model FeeRefund {
+  id         String   @id @default(uuid())
+  college_id String
+  student_id String
+  fee_id     String?
+  payment_id String?
+  amount     Decimal  @db.Decimal(12, 2)
+  reason     String
+  status     String?  @default("pending") // pending, approved, paid, rejected
+  approval_id String?                // Approval.id
+  decidedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, student_id])
+}
+
+// ---- Entry-test preparation (Phase 10) ----
+model McqQuestion {
+  id          String   @id @default(uuid())
+  college_id  String
+  subject     String                    // Physics, Chemistry, Biology, Mathematics, English, Logical Reasoning
+  class       String?                   // FSC Part 1, FSC Part 2
+  chapter     String?
+  topic       String?
+  text        String
+  options     Json                      // ["A ...", "B ...", "C ...", "D ..."]
+  answerIndex Int
+  explanation String?
+  difficulty  String?  @default("medium") // easy, medium, hard
+  tags        String[]                  // mdcat, ecat, nust
+  source      String   @default("manual") // manual, import, ai
+  isActive    Boolean? @default(true)
+  createdBy   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, subject, chapter])
+}
+
+model MockTest {
+  id            String   @id @default(uuid())
+  college_id    String
+  session_id    String
+  title         String
+  series        String?              // "MDCAT Series 2026"
+  tag           String               // mdcat, ecat
+  testDate      DateTime?
+  questionIds   String[]
+  totalMarks    Float?
+  negativeMark  Float?   @default(0)
+  markingMode   String   @default("manual") // online, manual, omr
+  answerKey     Json?                // used by manual and omr marking
+  status        String?  @default("draft") // draft, scheduled, done
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([college_id, session_id, tag])
+}
+
+model MockAttempt {
+  id          String   @id @default(uuid())
+  college_id  String
+  session_id  String
+  mock_id     String
+  student_id  String
+  answers     Json?
+  score       Float?
+  correct     Int?
+  wrong       Int?
+  skipped     Int?
+  rankSection Int?
+  rankCollege Int?
+  source      String   @default("manual") // online, manual, omr
+  file_id     String?                // scanned OMR sheet
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([college_id, mock_id, student_id])
+  @@index([college_id, session_id, student_id])
+}
+
+model AggregateFormula {
+  id         String   @id @default(uuid())
+  college_id String
+  name       String                    // "UHS MBBS 2026"
+  program    String                    // mbbs, bds, engineering, cs
+  weights    Json                      // { matric: 10, fsc: 40, entryTest: 50 }
+  year       Int?
+  isActive   Boolean? @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, program])
+}
+
+model EntryTestRegistration {
+  id             String   @id @default(uuid())
+  college_id     String
+  session_id     String
+  student_id     String
+  testName       String                  // MDCAT, ECAT, NUST NET
+  registrationNo String?
+  testDate       DateTime?
+  score          Float?
+  status         String?  @default("planned") // planned, registered, appeared, result_out
+  applications   Json?                   // [{ university, program, status, deadline }]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([college_id, session_id, student_id])
+}
+
+// ---- Parents, guidance (Phase 10) ----
+model ParentMeeting {
+  id          String   @id @default(uuid())
+  college_id  String
+  session_id  String
+  title       String
+  exam_id     String?                   // the test it follows
+  meetingDate DateTime
+  sectionIds  String[]
+  notes       Json?                     // [{ student_id, attended, note }]
+  status      String?  @default("scheduled") // scheduled, done, cancelled
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, session_id, meetingDate])
+}
+
+model CareerCounselling {
+  id          String   @id @default(uuid())
+  college_id  String
+  student_id  String
+  sessionDate DateTime
+  counsellor  String?
+  interests   String[]
+  plan        String?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, student_id])
+}
+
+model ScholarshipRecord {
+  id          String   @id @default(uuid())
+  college_id  String
+  student_id  String
+  scheme      String                    // PEEF, HEC, Punjab Endowment, college
+  provider    String?
+  amount      Decimal? @db.Decimal(12, 2)
+  status      String?  @default("applied") // applied, awarded, rejected, renewal_due, closed
+  renewalDate DateTime?
+  remarks     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([college_id, student_id])
+  @@index([college_id, status])
+}
+
+model StudentFeedback {
+  id         String   @id @default(uuid())
+  college_id String
+  student_id String?                   // null when anonymous
+  category   String                    // academic, facilities, discipline, staff, other
+  message    String
+  anonymous  Boolean? @default(false)
+  status     String?  @default("open") // open, in_review, resolved, closed
+  handledBy  String?
+  response   String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([college_id, status])
 }
 

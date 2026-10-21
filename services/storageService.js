@@ -108,7 +108,7 @@ function generateObjectKey(collegeId, category, entityId, originalFilename) {
  * Upload a buffer directly to R2 (backend-mediated upload).
  * Suitable for small files like avatars and logos.
  */
-async function uploadObject({ objectKey, body, contentType, metadata = {} }) {
+async function uploadObject({ objectKey, body, contentType, cacheControl, metadata = {} }) {
   const client = getR2Client();
   const bucket = getBucketName();
 
@@ -117,6 +117,7 @@ async function uploadObject({ objectKey, body, contentType, metadata = {} }) {
     Key: objectKey,
     Body: body,
     ContentType: contentType,
+    ...(cacheControl ? { CacheControl: cacheControl } : {}),
     Metadata: metadata,
   });
 

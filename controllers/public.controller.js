@@ -1,6 +1,7 @@
 // ─── Public Controller (Multi-DB with Prisma) ───────────────────
 const { getSystemClient, getTenantClient } = require('../config/prismaManager');
 const { verifyFirebaseToken } = require('../config/firebaseAdmin');
+const { consume, getCollegeLimit } = require('../services/quota');
 
 exports.getColleges = async (req, res, next) => {
   try {
@@ -300,9 +301,23 @@ exports.submitApplication = async (req, res, next) => {
         entryTestRequired: season.entryTestRequired || false,
         entryTestDate: season.entryTestDate,
         entryTestVenue: season.entryTestVenue,
+        source: 'ONLINE',
+        quota: req.body.quota || null,
+        equivalenceBoard: req.body.equivalenceBoard || null,
+        equivalenceMarks: req.body.equivalenceMarks ? parseFloat(req.body.equivalenceMarks) : null,
+        meritScore: req.body.equivalenceMarks ? parseFloat(req.body.equivalenceMarks) : sscAggregate,
         status: 'submitted'
       }
     });
+
+    // Atomically consume 1 application quota unit
+    try {
+      const currentYear = String(new Date().getFullYear());
+      const limit = await getCollegeLimit(systemDb, college.id, 'applications');
+      await consume(systemDb, college.id, 'applications', 1, limit, currentYear);
+    } catch (quotaErr) {
+      console.warn('Application quota consumption error:', quotaErr.message);
+    }
 
     res.status(201).json({
       success: true,

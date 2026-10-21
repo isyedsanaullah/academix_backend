@@ -25,7 +25,7 @@ const createAuditLog = async (prisma, { userId, collegeId, action, details, req 
 // ── Super Admin: Send College Invitation ────────────────────────────────
 exports.inviteCollege = async (req, res, next) => {
   try {
-    const { email, planId = 'basic' } = req.body;
+    const { email, planId = 'starter' } = req.body;
     if (!email || !email.includes('@')) {
       return res.status(400).json({ success: false, message: 'Valid official college email is required.' });
     }
@@ -344,7 +344,7 @@ exports.acceptInvitation = async (req, res, next) => {
         email: invitation.email,
         mongoUrl,
         subscription: {
-          plan: invitation.planId,
+          plan: invitation.planId === 'basic' ? 'starter' : (invitation.planId || 'starter'),
           status: 'active',
           startedAt: new Date()
         },

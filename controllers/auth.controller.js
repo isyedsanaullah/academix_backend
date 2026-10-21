@@ -5,6 +5,7 @@ const { getSystemClient } = require('../config/prismaManager');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
+const { getEntitlements } = require('../middleware/loadEntitlements');
 
 // @desc    Register a new user
 
@@ -129,9 +130,8 @@ exports.login = async (req, res, next) => {
       });
       if (college) {
         college._id = college.id;
-        const sub = (typeof college.subscription === 'object' && college.subscription !== null) ? college.subscription : {};
-        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
-        college.effectiveFeatures = effectiveKeys;
+        const ent = await getEntitlements(user.college_id);
+        college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
     }
 
@@ -222,9 +222,8 @@ exports.googleLogin = async (req, res, next) => {
       });
       if (college) {
         college._id = college.id;
-        const sub = (typeof college.subscription === 'object' && college.subscription !== null) ? college.subscription : {};
-        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
-        college.effectiveFeatures = effectiveKeys;
+        const ent = await getEntitlements(updatedUser.college_id);
+        college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
     }
 
@@ -276,9 +275,8 @@ exports.getMe = async (req, res, next) => {
       });
       if (college) {
         college._id = college.id;
-        const sub = (typeof college.subscription === 'object' && college.subscription !== null) ? college.subscription : {};
-        const { effectiveKeys } = resolveCollegeFeatures(sub.plan || 'basic', sub.featureOverrides || {});
-        college.effectiveFeatures = effectiveKeys;
+        const ent = await getEntitlements(user.college_id);
+        college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
     }
 

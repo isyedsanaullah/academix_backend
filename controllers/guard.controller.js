@@ -32,7 +32,7 @@ const getKarachiHour = (date = new Date()) => {
 };
 
 const findPersonByIdentifier = async (tenantDb, prisma, identifier, method, collegeId) => {
-  if (method === 'QR') {
+  if (method === 'QR' || method === 'MANUAL') {
     const student = await tenantDb.student.findFirst({
       where: { college_id: collegeId, qrCode: identifier, status: 'active' }
     });
@@ -103,7 +103,7 @@ exports.scanQR = async (req, res, next) => {
     const { identifier, verificationMethod = 'QR', deviceId = 'LAPTOP_CAMERA', location = 'Main Gate' } = req.body;
 
     const finalIdentifier = identifier || req.body.qrCode;
-    const finalMethod = verificationMethod || 'QR';
+    const finalMethod = req.body.verificationMethod || req.body.method || verificationMethod || 'QR';
     const finalDeviceId = deviceId || 'LAPTOP_CAMERA';
 
     if (!finalIdentifier) {
@@ -547,10 +547,7 @@ exports.getMyExitRequests = async (req, res, next) => {
       const teacher = await tenantDb.teacher.findFirst({
         where: {
           college_id: req.collegeId,
-          OR: [
-            { user_id: userId },
-            ...(userEmail ? [{ email: userEmail }] : [])
-          ]
+          user_id: userId
         }
       });
       if (teacher?.id) personIds.push(teacher.id);
@@ -608,28 +605,30 @@ exports.reviewExitRequest = async (req, res, next) => {
 
 exports.lookupQR = async (req, res, next) => {
   try {
-    const prisma = getSystemClient();
     const tenantDb = req.tenantClient;
     const { qrCode } = req.query;
     if (!qrCode) return res.status(400).json({ success: false, message: 'QR code required' });
-    const found = await findPersonByQR(tenantDb, prisma, qrCode, req.collegeId);
-    if (!found) return res.status(404).json({ success: false, message: 'Not found' });
-    
-    if (found.person) {
-      found.person = {
-        ...found.person,
-        _id: found.person.id || found.person._id
-      };
-    }
+    const code = String(qrCode).trim();
+    const student = await tenantDb.student.findFirst({
+      where: {
+        college_id: req.collegeId,
+        status: 'active',
+        OR: [{ qrCode: code }, { cardId: code }]
+      }
+    });
+    if (!student) return res.status(404).json({ success: false, message: 'Not found' });
 
     res.json({
       success: true,
       data: {
-        id: found.id,
-        name: found.name,
-        type: found.type,
-        role: found.role,
-        person: found.person
+        id: student.id,
+        name: student.name,
+        type: 'student',
+        role: 'student',
+        person: {
+          ...student,
+          _id: student.id
+        }
       }
     });
   } catch (error) { next(error); }

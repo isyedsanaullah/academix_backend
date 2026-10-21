@@ -39,7 +39,10 @@ exports.createCertificate = async (req, res, next) => {
       status
     } = req.body;
 
+    const { generateVerifyToken } = require('../services/documentTemplates');
+    const { recordVerifyToken } = require('../services/verifyToken.service');
     const certNum = `CERT-${type?.toUpperCase().slice(0, 3)}-${Date.now().toString(36).toUpperCase()}`;
+    const verifyToken = generateVerifyToken();
 
     const cert = await tenantDb.certificate.create({
       data: {
@@ -53,9 +56,17 @@ exports.createCertificate = async (req, res, next) => {
         academicConsistency: academicConsistency || null,
         basedOn: basedOn || null,
         issuedBy: req.user._id,
-        status: status || 'issued'
+        status: status || 'issued',
+        verifyToken
       }
     });
+
+    await recordVerifyToken({
+      token: verifyToken,
+      collegeId: req.collegeId,
+      kind: 'certificate',
+      refId: cert.id
+    }).catch(err => console.error('Failed to register verifyToken:', err.message));
 
     res.status(201).json({
       success: true,

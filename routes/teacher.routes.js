@@ -9,4 +9,10 @@ router.route('/').get(authorize('admin', 'principal'), getTeachers).post(authori
 router.route('/:id').get(authorize('admin', 'principal'), getTeacher).put(authorize('admin'), updateTeacher);
 router.put('/:id/assign', authorize('admin'), assignClasses);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Core SIS entity: teacher management"
+};
+
 module.exports = router;

@@ -1,6 +1,17 @@
 const bcrypt = require('bcryptjs');
-const { getSystemClient } = require('../config/prismaManager');
+const prismaManager = require('../config/prismaManager');
+const getSystemClient = () => prismaManager.getSystemClient();
 const { resolveFileUrl } = require('../services/fileResolver');
+const { clearEntitlementCache } = require('../middleware/loadEntitlements');
+const {
+  uploadObject,
+  generateObjectKey,
+  sanitizeFilename,
+  computeChecksum,
+  toR2Reference
+} = require('../services/storageService');
+const { optimizeImage, MAX_IMAGE_FILE_SIZE } = require('../services/mediaOptimizer');
+const { consume, getCollegeLimit } = require('../services/quota');
 
 exports.getCollegeInfo = async (req, res, next) => {
   try {
@@ -221,11 +232,19 @@ exports.updateSettings = async (req, res, next) => {
     const prisma = getSystemClient();
     const body = req.body || {};
     
+    const existingCollege = await prisma.college.findUnique({
+      where: { id: req.collegeId }
+    });
+    if (!existingCollege) return res.status(404).json({ success: false, message: 'College not found' });
+
     // Extract direct college fields
-    const { logo, website, phone, email, address, city, ...settingsOnly } = body;
+    const { logo, website, phone, email, address, city, methodPrefs, ...settingsOnly } = body;
     
+    const existingSettings = (existingCollege.settings && typeof existingCollege.settings === 'object') ? existingCollege.settings : {};
+    const mergedSettings = { ...existingSettings, ...settingsOnly };
+
     const updateData = {
-      settings: settingsOnly
+      settings: mergedSettings
     };
     
     if (logo !== undefined) updateData.logo = logo;
@@ -235,11 +254,21 @@ exports.updateSettings = async (req, res, next) => {
     if (address !== undefined) updateData.address = address;
     if (city !== undefined) updateData.city = city;
 
+    // Phase 9: If methodPrefs is provided, update subscription.methodPrefs
+    if (methodPrefs && typeof methodPrefs === 'object') {
+      const existingSub = (existingCollege.subscription && typeof existingCollege.subscription === 'object') ? existingCollege.subscription : {};
+      updateData.subscription = {
+        ...existingSub,
+        methodPrefs
+      };
+    }
+
     const college = await prisma.college.update({
       where: { id: req.collegeId },
       data: updateData
     });
-    if (!college) return res.status(404).json({ success: false, message: 'College not found' });
+
+    clearEntitlementCache(req.collegeId);
     
     const responseData = {
       ...(college.settings && typeof college.settings === 'object' ? college.settings : {}),
@@ -377,3 +406,334 @@ exports.addStaff = async (req, res, next) => {
     });
   } catch (error) { next(error); }
 };
+
+/**
+ * GET /api/college/branding
+ * Retrieve branding configuration including logo, stamp, colors, and signatures
+ */
+exports.getBranding = async (req, res, next) => {
+  try {
+    const prisma = getSystemClient();
+    const college = await prisma.college.findUnique({
+      where: { id: req.collegeId }
+    });
+    if (!college) return res.status(404).json({ success: false, message: 'College not found' });
+
+    const tenantDb = req.tenantClient;
+    const settings = (college.settings && typeof college.settings === 'object') ? college.settings : {};
+    const branding = (settings.branding && typeof settings.branding === 'object') ? settings.branding : {};
+
+    const resolvedLogo = college.logo ? await resolveFileUrl(college.logo, tenantDb, req.collegeId) : null;
+    const resolvedStamp = branding.stamp ? await resolveFileUrl(branding.stamp, tenantDb, req.collegeId) : null;
+
+    const signatures = branding.signatures || {};
+    const resolvedSignatures = {};
+    for (const [role, ref] of Object.entries(signatures)) {
+      resolvedSignatures[role] = ref ? await resolveFileUrl(ref, tenantDb, req.collegeId) : null;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        collegeId: college.id,
+        name: college.name,
+        code: college.code,
+        logo: resolvedLogo || college.logo || '',
+        logoRef: college.logo || '',
+        stamp: resolvedStamp || branding.stamp || '',
+        stampRef: branding.stamp || '',
+        signatures: resolvedSignatures,
+        signatureRefs: signatures,
+        primaryColor: branding.primaryColor || '#1e3a8a',
+        secondaryColor: branding.secondaryColor || '#3b82f6',
+        accentColor: branding.accentColor || '#10b981',
+        tagline: branding.tagline || '',
+        motto: branding.motto || '',
+        affiliation: branding.affiliation || '',
+        letterheadHeader: branding.letterheadHeader || '',
+        letterheadFooter: branding.letterheadFooter || '',
+        fontFamily: branding.fontFamily || 'Inter, sans-serif'
+      }
+    });
+  } catch (error) { next(error); }
+};
+
+/**
+ * PUT /api/college/branding
+ * Update branding configuration (colors, motto, tagline, letterhead)
+ */
+exports.updateBranding = async (req, res, next) => {
+  try {
+    const prisma = getSystemClient();
+    const college = await prisma.college.findUnique({
+      where: { id: req.collegeId }
+    });
+    if (!college) return res.status(404).json({ success: false, message: 'College not found' });
+
+    const {
+      logo,
+      stamp,
+      primaryColor,
+      secondaryColor,
+      accentColor,
+      tagline,
+      motto,
+      affiliation,
+      letterheadHeader,
+      letterheadFooter,
+      fontFamily,
+      signatures
+    } = req.body;
+
+    const currentSettings = (college.settings && typeof college.settings === 'object') ? college.settings : {};
+    const currentBranding = (currentSettings.branding && typeof currentSettings.branding === 'object') ? currentSettings.branding : {};
+
+    const updatedBranding = {
+      ...currentBranding,
+      ...(primaryColor !== undefined && { primaryColor }),
+      ...(secondaryColor !== undefined && { secondaryColor }),
+      ...(accentColor !== undefined && { accentColor }),
+      ...(tagline !== undefined && { tagline }),
+      ...(motto !== undefined && { motto }),
+      ...(affiliation !== undefined && { affiliation }),
+      ...(letterheadHeader !== undefined && { letterheadHeader }),
+      ...(letterheadFooter !== undefined && { letterheadFooter }),
+      ...(fontFamily !== undefined && { fontFamily }),
+      ...(stamp !== undefined && { stamp }),
+      signatures: {
+        ...(currentBranding.signatures || {}),
+        ...(signatures || {})
+      }
+    };
+
+    const updatePayload = {
+      settings: {
+        ...currentSettings,
+        branding: updatedBranding
+      }
+    };
+
+    if (logo !== undefined) {
+      updatePayload.logo = logo;
+    }
+
+    const updatedCollege = await prisma.college.update({
+      where: { id: req.collegeId },
+      data: updatePayload
+    });
+
+    res.json({
+      success: true,
+      message: 'College branding updated successfully.',
+      data: {
+        logo: updatedCollege.logo,
+        branding: updatedBranding
+      }
+    });
+  } catch (error) { next(error); }
+};
+
+/**
+ * POST /api/college/branding/signature/:role
+ * Upload and process signature with near-white background removal
+ */
+exports.uploadSignature = async (req, res, next) => {
+  try {
+    const { role } = req.params;
+    const targetRole = (role || '').toLowerCase();
+    const validRoles = ['principal', 'accountant', 'registrar', 'examinationhead', 'cashier', 'admin'];
+
+    if (!validRoles.includes(targetRole)) {
+      return res.status(400).json({
+        success: false,
+        message: `Invalid signature role '${role}'. Allowed: ${validRoles.join(', ')}`
+      });
+    }
+
+    // Role-based authorization: admin or principal can upload any signature, otherwise user can only upload their own role's signature
+    const userRole = (req.user?.role || '').toLowerCase();
+    if (userRole !== 'admin' && userRole !== 'principal' && userRole !== targetRole) {
+      return res.status(403).json({
+        success: false,
+        message: `You are not authorized to upload signatures for '${role}'.`
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, message: 'No signature file uploaded.' });
+    }
+
+    if (req.file.size > MAX_IMAGE_FILE_SIZE) {
+      return res.status(400).json({
+        success: false,
+        code: 'FILE_TOO_LARGE',
+        message: 'Signature image exceeds 5 MB limit'
+      });
+    }
+
+    const collegeId = req.collegeId;
+    const userId = req.user.id || req.user._id;
+    const tenantDb = req.tenantClient;
+
+    // Apply background removal (near-white to transparent) and keep PNG format
+    const removeBg = req.query.removeBackground !== 'false' && req.body.removeBackground !== 'false';
+    const opt = await optimizeImage(req.file.buffer, {
+      entityType: 'Signature',
+      category: 'signatures',
+      removeBackground: removeBg,
+      bgThreshold: 240
+    });
+
+    // Check storageBytes quota
+    const sysDb = getSystemClient();
+    const storageLimit = await getCollegeLimit(sysDb, collegeId, 'storageBytes');
+    const quotaResult = await consume(sysDb, collegeId, 'storageBytes', opt.sizeBytes, storageLimit);
+    if (!quotaResult.allowed) {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        message: 'Quota exceeded for storageBytes',
+        metric: 'storageBytes'
+      });
+    }
+
+    const sanitizedName = sanitizeFilename(`signature_${targetRole}.png`);
+    const objectKey = generateObjectKey(collegeId, 'signatures', targetRole, sanitizedName);
+    const checksum = computeChecksum(opt.buffer);
+
+    // Upload to R2
+    await uploadObject({
+      objectKey,
+      body: opt.buffer,
+      contentType: 'image/png',
+      cacheControl: 'public, max-age=31536000, immutable'
+    });
+
+    // Create StoredFile record
+    const storedFile = await tenantDb.storedFile.create({
+      data: {
+        college_id: collegeId,
+        uploadedById: userId,
+        objectKey,
+        originalFilename: sanitizedName,
+        contentType: 'image/png',
+        sizeBytes: opt.sizeBytes,
+        checksumSha256: checksum,
+        category: 'signatures',
+        entityType: 'Signature',
+        entityId: targetRole,
+        status: 'ready'
+      }
+    });
+
+    const signatureRef = toR2Reference(storedFile.id);
+
+    // Update College.settings.branding.signatures[targetRole]
+    const college = await sysDb.college.findUnique({ where: { id: collegeId } });
+    const currentSettings = (college?.settings && typeof college.settings === 'object') ? college.settings : {};
+    const currentBranding = (currentSettings.branding && typeof currentSettings.branding === 'object') ? currentSettings.branding : {};
+    const signatures = {
+      ...(currentBranding.signatures || {}),
+      [targetRole]: signatureRef
+    };
+
+    await sysDb.college.update({
+      where: { id: collegeId },
+      data: {
+        settings: {
+          ...currentSettings,
+          branding: {
+            ...currentBranding,
+            signatures
+          }
+        }
+      }
+    });
+
+    res.status(201).json({
+      success: true,
+      message: `Signature for '${targetRole}' uploaded and processed successfully.`,
+      data: {
+        role: targetRole,
+        signatureRef,
+        fileId: storedFile.id,
+        sizeBytes: opt.sizeBytes,
+        format: 'png',
+        backgroundRemoved: removeBg
+      }
+    });
+  } catch (error) { next(error); }
+};
+
+// ══════════════════════════════════════════════════════════════════════════════
+// COLLEGE PLATFORM INVOICES (Phase 12)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/college/invoices
+ * College admins view their own platform billing invoices
+ */
+exports.getCollegeInvoices = async (req, res, next) => {
+  try {
+    const sysDb = getSystemClient();
+    const collegeId = req.collegeId;
+
+    const invoices = await sysDb.platformInvoice.findMany({
+      where: { college_id: collegeId },
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json({
+      success: true,
+      count: invoices.length,
+      data: invoices
+    });
+  } catch (error) { next(error); }
+};
+
+/**
+ * GET /api/college/invoices/:id.pdf
+ * College admin downloads their platform invoice or paid receipt PDF
+ */
+exports.downloadCollegeInvoicePDF = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const collegeId = req.collegeId;
+    const sysDb = getSystemClient();
+
+    const invoice = await sysDb.platformInvoice.findFirst({
+      where: { id, college_id: collegeId }
+    });
+
+    if (!invoice) {
+      return res.status(404).json({
+        success: false,
+        code: 'NOT_FOUND',
+        message: 'Platform invoice not found'
+      });
+    }
+
+    const college = await sysDb.college.findUnique({ where: { id: collegeId } });
+    const { generatePlatformInvoicePDF } = require('../services/documentTemplates');
+
+    const baseUrl = process.env.FRONTEND_URL || `${req.protocol}://${req.get('host')}`;
+    const isReceipt = req.query.receipt === 'true' && invoice.status === 'paid';
+
+    const pdfDoc = await generatePlatformInvoicePDF({
+      invoice,
+      college,
+      isPaid: invoice.status === 'paid' && isReceipt,
+      verifyBaseUrl: baseUrl
+    });
+
+    const filename = isReceipt ? `receipt_${invoice.invoiceNo}.pdf` : `invoice_${invoice.invoiceNo}.pdf`;
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    pdfDoc.pipe(res);
+    pdfDoc.end();
+  } catch (error) { next(error); }
+};
+
+

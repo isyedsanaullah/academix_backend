@@ -7,4 +7,10 @@ const tenantContext = require('../middleware/tenantContext');
 router.use(protect, tenantContext);
 router.get('/', authorize('admin', 'principal', 'superAdmin'), getLogs);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Security and administrative audit trail"
+};
+
 module.exports = router;

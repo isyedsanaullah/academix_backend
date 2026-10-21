@@ -6,10 +6,10 @@ const {
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
-const planGate = require('../middleware/planGate');
+const { featureGate } = require('../middleware/loadEntitlements');
 
 // All generator routes require auth + tenant + premium plan
-router.use(protect, tenantContext, planGate('ai-generators'));
+router.use(protect, tenantContext, featureGate('ai-generators'));
 
 // Teachers and admins can generate content
 router.post('/quiz', authorize('teacher', 'admin', 'principal'), generateQuiz);
@@ -18,5 +18,10 @@ router.post('/mcq', authorize('teacher', 'admin', 'principal'), generateMCQ);
 router.post('/notes', authorize('teacher', 'admin', 'principal', 'student'), generateNotes);
 router.post('/assignment', authorize('teacher', 'admin'), generateAssignment);
 router.post('/syllabus', authorize('teacher', 'admin', 'principal'), generateSyllabus);
+
+
+router.meta = {
+  "feature": "ai-generators"
+};
 
 module.exports = router;

@@ -116,6 +116,28 @@ exports.markAttendance = async (req, res, next) => {
     parsedDate.setHours(0, 0, 0, 0);
 
     const userId = req.user?.id || req.user?._id || null;
+    const isTeacherEdit = req.user?.role === 'teacher';
+
+    const existing = await tenantDb.attendance.findUnique({
+      where: {
+        college_id_session_id_student_id_date: {
+          college_id: req.collegeId,
+          session_id: sessionId,
+          student_id,
+          date: parsedDate
+        }
+      }
+    });
+
+    let updateMethod = method || 'manual';
+    let updateRemarks = remarks;
+    let correctionReason = undefined;
+
+    if (existing && isTeacherEdit && (existing.method === 'qr' || existing.method === 'biometric')) {
+      updateMethod = 'manual';
+      updateRemarks = 'correction';
+      correctionReason = req.body.reason || null;
+    }
 
     const attendance = await tenantDb.attendance.upsert({
       where: {
@@ -128,11 +150,12 @@ exports.markAttendance = async (req, res, next) => {
       },
       update: {
         status,
-        method: method || 'manual',
+        method: updateMethod,
         entryTime: entryTime ? new Date(entryTime) : undefined,
         exitTime: exitTime ? new Date(exitTime) : undefined,
         markedBy: userId,
-        remarks,
+        remarks: updateRemarks,
+        ...(correctionReason !== undefined ? { correctionReason } : {}),
         class: student?.class,
         section: student?.section
       },
@@ -147,6 +170,7 @@ exports.markAttendance = async (req, res, next) => {
         exitTime: exitTime ? new Date(exitTime) : undefined,
         markedBy: userId,
         remarks,
+        correctionReason: req.body.reason || null,
         class: student?.class,
         section: student?.section
       }
@@ -169,36 +193,65 @@ exports.markBulkAttendance = async (req, res, next) => {
     parsedDate.setHours(0, 0, 0, 0);
 
     const userId = req.user?.id || req.user?._id || null;
+    const isTeacherEdit = req.user?.role === 'teacher';
+
+    const studentIds = records.map(r => r.student_id).filter(Boolean);
+    const existingList = await tenantDb.attendance.findMany({
+      where: {
+        college_id: req.collegeId,
+        session_id: sessionId,
+        date: parsedDate,
+        student_id: { in: studentIds }
+      }
+    });
+    const existingMap = new Map(existingList.map(e => [e.student_id, e]));
 
     await tenantDb.$transaction(
-      records.map(r => tenantDb.attendance.upsert({
-        where: {
-          college_id_session_id_student_id_date: {
+      records.map(r => {
+        const existing = existingMap.get(r.student_id);
+        let finalMethod = 'manual';
+        let finalRemarks = r.remarks;
+        let correctionReason = undefined;
+
+        if (existing && isTeacherEdit && (existing.method === 'qr' || existing.method === 'biometric')) {
+          finalMethod = 'manual';
+          finalRemarks = 'correction';
+          correctionReason = r.reason || req.body.reason || null;
+        }
+
+        return tenantDb.attendance.upsert({
+          where: {
+            college_id_session_id_student_id_date: {
+              college_id: req.collegeId,
+              session_id: sessionId,
+              student_id: r.student_id,
+              date: parsedDate
+            }
+          },
+          update: {
+            status: r.status,
+            method: finalMethod,
+            markedBy: userId,
+            class: r.class,
+            section: r.section,
+            ...(finalRemarks !== undefined ? { remarks: finalRemarks } : {}),
+            ...(correctionReason !== undefined ? { correctionReason } : {})
+          },
+          create: {
             college_id: req.collegeId,
             session_id: sessionId,
             student_id: r.student_id,
-            date: parsedDate
+            date: parsedDate,
+            status: r.status,
+            method: 'manual',
+            markedBy: userId,
+            class: r.class,
+            section: r.section,
+            remarks: r.remarks,
+            correctionReason: r.reason || req.body.reason || null
           }
-        },
-        update: {
-          status: r.status,
-          method: 'manual',
-          markedBy: userId,
-          class: r.class,
-          section: r.section
-        },
-        create: {
-          college_id: req.collegeId,
-          session_id: sessionId,
-          student_id: r.student_id,
-          date: parsedDate,
-          status: r.status,
-          method: 'manual',
-          markedBy: userId,
-          class: r.class,
-          section: r.section
-        }
-      }))
+        });
+      })
     );
 
     res.json({ success: true, message: `${records.length} attendance records saved` });

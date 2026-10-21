@@ -10,4 +10,10 @@ router.get('/', getPendingApprovals);
 router.put('/:id/approve', approveRequest);
 router.put('/:id/reject', rejectRequest);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Administrative approval workflows"
+};
+
 module.exports = router;

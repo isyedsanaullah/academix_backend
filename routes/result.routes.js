@@ -3,9 +3,9 @@ const { getResults, createResult, updateResult, bulkCreateResults, getResultById
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
-const planGate = require('../middleware/planGate');
+const { featureGate } = require('../middleware/loadEntitlements');
 
-router.use(protect, tenantContext, planGate('exams-results'));
+router.use(protect, tenantContext, featureGate('exams-results'));
 
 router.route('/')
   .get(authorize('admin', 'registrar', 'principal', 'teacher', 'accountant'), getResults)
@@ -17,5 +17,10 @@ router.get('/my', authorize('student'), getMyResults);
 router.route('/:id')
   .get(authorize('admin', 'registrar', 'principal', 'teacher', 'student'), getResultById)
   .put(authorize('teacher'), updateResult);
+
+
+router.meta = {
+  "feature": "exams-results"
+};
 
 module.exports = router;

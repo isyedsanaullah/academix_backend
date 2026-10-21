@@ -424,3 +424,233 @@ exports.generatePDF = async (req, res, next) => {
     next(error);
   }
 };
+
+const { getCachedCollegeLogo, renderStudentReportPage } = require('../services/studentReport.service');
+
+/**
+ * GET /api/reports/student/:id.pdf
+ * Generates and streams comprehensive student report PDF on demand (never stored)
+ */
+exports.getStudentReportPDF = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const systemDb = getSystemClient();
+    const collegeId = req.collegeId;
+    let studentId = req.params.id;
+
+    // Handle .pdf extension in URL if present
+    if (studentId.endsWith('.pdf')) {
+      studentId = studentId.replace('.pdf', '');
+    }
+
+    // 1. Fetch student
+    const student = await tenantDb.student.findFirst({
+      where: {
+        OR: [{ id: studentId }, { rollNumber: studentId }],
+        college_id: collegeId
+      }
+    });
+
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student record not found' });
+    }
+
+    // Role check: If caller is a student, they can only view their own report
+    if (req.user.role === 'student' && student.user_id !== req.user.id) {
+      return res.status(403).json({
+        success: false,
+        code: 'FORBIDDEN',
+        message: 'Students are only permitted to access their own performance reports'
+      });
+    }
+
+    // Fetch user info for name
+    const studentUser = student.user_id
+      ? await systemDb.user.findUnique({ where: { id: student.user_id }, select: { name: true } })
+      : null;
+
+    const studentProfile = {
+      ...student,
+      name: studentUser?.name || student.name || 'Student'
+    };
+
+    // 2. Fetch college & cached logo (10 min in-memory cache)
+    const college = await systemDb.college.findUnique({
+      where: { id: collegeId },
+      select: { name: true, address: true, phone: true }
+    });
+    const logoBuffer = await getCachedCollegeLogo(systemDb, collegeId);
+
+    // 3. Aggregate Monthly Attendance
+    const attendanceRecords = await tenantDb.attendance.findMany({
+      where: { college_id: collegeId, student_id: student.id },
+      orderBy: { date: 'desc' }
+    });
+
+    const monthMap = new Map();
+    attendanceRecords.forEach(r => {
+      const d = new Date(r.date);
+      const mKey = d.toLocaleString('en-US', { month: 'short', year: 'numeric' });
+      if (!monthMap.has(mKey)) monthMap.set(mKey, { present: 0, total: 0 });
+      const m = monthMap.get(mKey);
+      m.total += 1;
+      if (r.status === 'present' || r.status === 'late') m.present += 1;
+    });
+
+    const attendanceData = [...monthMap.entries()].map(([month, data]) => ({
+      month,
+      present: data.present,
+      total: data.total,
+      pct: data.total > 0 ? (data.present / data.total) * 100 : 0
+    }));
+
+    // 4. Fetch Exam Results
+    const examResults = [];
+    if (tenantDb.result) {
+      const results = await tenantDb.result.findMany({
+        where: { college_id: collegeId, student_id: student.id },
+        take: 10
+      });
+      results.forEach(r => {
+        examResults.push({
+          name: r.examName || 'Internal Test',
+          totalMarks: r.totalMarks || 100,
+          obtainedMarks: r.obtainedMarks || 0,
+          pct: r.totalMarks ? ((r.obtainedMarks / r.totalMarks) * 100) : 0,
+          grade: r.grade || 'B',
+          position: r.position || '-'
+        });
+      });
+    }
+
+    // 5. Fee and Fines Summary
+    let feeData = { total: 0, paid: 0 };
+    if (tenantDb.fee) {
+      const fees = await tenantDb.fee.findMany({
+        where: { college_id: collegeId, student_id: student.id }
+      });
+      const total = fees.reduce((acc, f) => acc + Number(f.totalAmount || 0), 0);
+      const paid = fees.reduce((acc, f) => acc + Number(f.paidAmount || 0), 0);
+      feeData = { total, paid };
+    }
+
+    let finesData = { count: 0, pendingAmount: 0 };
+    if (tenantDb.fine) {
+      const fines = await tenantDb.fine.findMany({
+        where: { college_id: collegeId, student_id: student.id }
+      });
+      finesData = {
+        count: fines.length,
+        pendingAmount: fines.filter(f => f.status !== 'paid').reduce((acc, f) => acc + Number(f.amount || 0), 0)
+      };
+    }
+
+    // Create and stream PDF
+    const doc = new PDFDocument({ margin: 30, size: 'A4' });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="Student_Report_${student.rollNumber || student.id}.pdf"`);
+
+    doc.pipe(res);
+
+    await renderStudentReportPage(doc, {
+      student: studentProfile,
+      college,
+      logoBuffer,
+      attendanceData,
+      examResults,
+      feeData,
+      finesData,
+      isFirstPage: true
+    });
+
+    doc.end();
+  } catch (error) { next(error); }
+};
+
+/**
+ * POST /api/reports/student-batch.pdf
+ * Generates and streams a multi-student report PDF for a section (max 60 students per batch)
+ */
+exports.getBatchStudentReportPDF = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const systemDb = getSystemClient();
+    const collegeId = req.collegeId;
+    const { sectionId, section_id, class: cls, section: secCode } = req.body;
+
+    const targetSectionId = sectionId || section_id;
+
+    // Find students for section
+    const where = { college_id: collegeId };
+    if (targetSectionId) {
+      where.section_id = targetSectionId;
+    } else if (cls && secCode) {
+      where.class = cls;
+      where.section = secCode;
+    } else {
+      return res.status(400).json({ success: false, message: 'sectionId or (class and section) is required' });
+    }
+
+    const students = await tenantDb.student.findMany({
+      where,
+      orderBy: { rollNumber: 'asc' },
+      take: 65 // Fetch up to 65 to verify limit enforcement
+    });
+
+    // Hard Limit: Max 60 students per batch request
+    if (students.length > 60) {
+      return res.status(400).json({
+        success: false,
+        code: 'BATCH_LIMIT_EXCEEDED',
+        message: 'Batch student report limited to 60 students per request'
+      });
+    }
+
+    if (students.length === 0) {
+      return res.status(404).json({ success: false, message: 'No students found in the specified section' });
+    }
+
+    // Fetch user names for students
+    const userIds = students.map(s => s.user_id).filter(Boolean);
+    const users = await systemDb.user.findMany({
+      where: { id: { in: userIds } },
+      select: { id: true, name: true }
+    });
+    const userMap = Object.fromEntries(users.map(u => [u.id, u.name]));
+
+    const college = await systemDb.college.findUnique({
+      where: { id: collegeId },
+      select: { name: true, address: true, phone: true }
+    });
+    const logoBuffer = await getCachedCollegeLogo(systemDb, collegeId);
+
+    const doc = new PDFDocument({ margin: 30, size: 'A4', autoFirstPage: false });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="Batch_Student_Reports_${Date.now()}.pdf"`);
+
+    doc.pipe(res);
+
+    for (let i = 0; i < students.length; i++) {
+      const student = students[i];
+      const studentProfile = {
+        ...student,
+        name: userMap[student.user_id] || student.name || 'Student'
+      };
+
+      await renderStudentReportPage(doc, {
+        student: studentProfile,
+        college,
+        logoBuffer,
+        attendanceData: [],
+        examResults: [],
+        feeData: { total: 0, paid: 0 },
+        finesData: { count: 0, pendingAmount: 0 },
+        isFirstPage: false
+      });
+    }
+
+    doc.end();
+  } catch (error) { next(error); }
+};

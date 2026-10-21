@@ -10,7 +10,9 @@ const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
 
-router.use(protect, tenantContext);
+const { featureGate } = require('../middleware/loadEntitlements');
+
+router.use(protect, tenantContext, featureGate('universal-timetable'));
 
 router.route('/')
   .get(authorize('admin', 'registrar', 'principal', 'teacher'), getUniversalTimetables)
@@ -21,4 +23,5 @@ router.route('/:id')
   .put(authorize('admin', 'registrar'), updateUniversalTimetable)
   .delete(authorize('admin', 'registrar'), deleteUniversalTimetable);
 
+router.meta = { feature: 'universal-timetable' };
 module.exports = router;

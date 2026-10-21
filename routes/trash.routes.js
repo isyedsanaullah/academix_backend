@@ -17,4 +17,10 @@ router.use(tenantContext);
 router.get('/', getTrash);
 router.post('/:resourceType/:id/restore', restoreItem);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Administrative recycle bin and data recovery"
+};
+
 module.exports = router;

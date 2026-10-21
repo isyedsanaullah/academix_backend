@@ -74,6 +74,7 @@ if (process.env.NODE_ENV === 'development') {
 // Auth & Platform
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/super-admin', require('./routes/superAdmin.routes'));
+app.use('/api/superadmin', require('./routes/superAdmin.routes'));
 
 // College Core
 app.use('/api/colleges/onboarding', require('./routes/onboarding.routes'));
@@ -83,6 +84,9 @@ app.use('/api/classes', require('./routes/class.routes'));
 app.use('/api/groups', require('./routes/group.routes'));
 app.use('/api/sections', require('./routes/section.routes'));
 app.use('/api/subjects', require('./routes/subject.routes'));
+app.use('/api/batches', require('./routes/batch.routes'));
+app.use('/api/promotions', require('./routes/batch.routes'));
+app.use('/api/combined-classes', require('./routes/combinedClass.routes'));
 
 // People Management
 app.use('/api/users', require('./routes/user.routes'));
@@ -93,19 +97,31 @@ app.use('/api/employees', require('./routes/employee.routes'));
 // Academic Operations
 app.use('/api/attendance', require('./routes/attendance.routes'));
 app.use('/api/fees', require('./routes/fee.routes'));
+app.use('/api/payment-proofs', require('./routes/paymentProof.routes'));
 app.use('/api/exams', require('./routes/exam.routes'));
 app.use('/api/results', require('./routes/result.routes'));
+app.use('/api/board', require('./routes/board.routes'));
+app.use('/api/eligibility', require('./routes/eligibility.routes'));
+app.use('/api/practicals', require('./routes/practical.routes'));
+app.use('/api/exam-analytics', require('./routes/examAnalytics.routes'));
+app.use('/api/admissions', require('./routes/admissions.routes'));
+app.use('/api/leads', require('./routes/lead.routes'));
+app.use('/api/entry-test', require('./routes/entryTest.routes'));
+app.use('/api/guidance', require('./routes/guidance.routes'));
 
 // LMS
 app.use('/api/assignments', require('./routes/assignment.routes'));
 app.use('/api/quizzes', require('./routes/quiz.routes'));
 app.use('/api/timetables', require('./routes/timetable.routes'));
+app.use('/api/timetable', require('./routes/timetableGenerator.routes'));
 app.use('/api/universal-timetables', require('./routes/universalTimetable.routes'));
+app.use('/api/substitutions', require('./routes/substitution.routes'));
 
 // Communication & Security
 app.use('/api/announcements', require('./routes/announcement.routes'));
 app.use('/api/notifications', require('./routes/notification.routes'));
 app.use('/api/certificates', require('./routes/certificate.routes'));
+app.use('/api/documents', require('./routes/document.routes'));
 app.use('/api/audit-logs', require('./routes/auditLog.routes'));
 app.use('/api/activity-logs', require('./routes/activityLog.routes'));
 app.use('/api/trash', require('./routes/trash.routes'));
@@ -135,6 +151,8 @@ app.use('/api/leaves', require('./routes/leaveApplication.routes'));
 app.use('/api/fines', require('./routes/fine.routes'));
 app.use('/api/gate', require('./routes/guard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
+app.use('/api/me', require('./routes/me.routes'));
+app.use('/api', require('./routes/fallback.routes'));
 app.use('/api/analytics', require('./routes/analytics.routes'));
 app.use('/api/approvals', require('./routes/approval.routes'));
 app.use('/api/evaluations', require('./routes/evaluation.routes'));

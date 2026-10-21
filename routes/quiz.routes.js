@@ -21,9 +21,9 @@ const {
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
 const tenantContext = require('../middleware/tenantContext');
-const planGate = require('../middleware/planGate');
+const { featureGate } = require('../middleware/loadEntitlements');
 
-router.use(protect, tenantContext, planGate('assignments-quizzes'));
+router.use(protect, tenantContext, featureGate('quizzes'));
 
 // Base Quizzes Route
 router.route('/')
@@ -55,5 +55,7 @@ router.post('/attempt/:attemptId/submit', authorize('student'), submitAttempt);
 // Analytics & Results
 router.get('/:id/analytics', authorize('teacher', 'admin', 'principal'), getQuizAnalytics);
 router.post('/:id/release-results', authorize('teacher', 'admin'), releaseResults);
+
+router.meta = { feature: 'quizzes' };
 
 module.exports = router;

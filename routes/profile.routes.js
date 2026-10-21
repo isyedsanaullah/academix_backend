@@ -22,4 +22,10 @@ router.post('/email/verify/send', sendVerificationCode);
 router.post('/email/verify', verifyEmail);
 router.put('/email', changeEmail);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Personal profile settings and password change"
+};
+
 module.exports = router;

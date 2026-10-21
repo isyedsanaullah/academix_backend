@@ -12,13 +12,13 @@ const {
 } = require('../controllers/aiChat.controller');
 const protect = require('../middleware/auth');
 const tenantContext = require('../middleware/tenantContext');
-const planGate = require('../middleware/planGate');
+const { featureGate } = require('../middleware/loadEntitlements');
 
 // Public/Token-authenticated preview & download endpoints
 router.get('/reports/preview/:token', previewReport);
 router.get('/reports/download/:token', protect, downloadReport);
 
-router.use(protect, tenantContext, planGate('ai-chat'));
+router.use(protect, tenantContext, featureGate('ai-chat'));
 
 router.post('/', sendMessage);
 router.get('/history', getChatHistory);
@@ -28,5 +28,10 @@ router.route('/:id')
   .put(renameConversation)
   .delete(deleteConversation);
 router.patch('/:id/announcement-status', updateAnnouncementStatus);
+
+
+router.meta = {
+  "feature": "ai-chat"
+};
 
 module.exports = router;

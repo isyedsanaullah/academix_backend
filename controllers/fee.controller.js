@@ -444,6 +444,9 @@ exports.createFee = async (req, res, next) => {
 
     const challanNumber = `CH-${Date.now()}-${student.rollNumber}`;
     const userId = req.user?.id || req.user?._id || null;
+    const { generateVerifyToken } = require('../services/documentTemplates');
+    const { recordVerifyToken } = require('../services/verifyToken.service');
+    const verifyToken = generateVerifyToken();
 
     const fee = await tenantDb.fee.create({
       data: {
@@ -463,11 +466,19 @@ exports.createFee = async (req, res, next) => {
         paidAmount: new Prisma.Decimal(0),
         status: calculated.status,
         challanNumber,
+        verifyToken,
         dueDate: dueDate ? new Date(dueDate) : null,
         enteredBy: userId,
         remarks
       }
     });
+
+    await recordVerifyToken({
+      token: verifyToken,
+      collegeId: req.collegeId,
+      kind: 'voucher',
+      refId: fee.id
+    }).catch(err => console.error('Failed to register verifyToken for fee voucher:', err.message));
 
     res.status(201).json({
       success: true,
@@ -606,8 +617,10 @@ exports.recordPayment = async (req, res, next) => {
         throw err;
       }
 
-      // Generate Receipt Number
+      // Generate Receipt Number and verifyToken
       const receiptNumber = `RCP-${Date.now().toString(36).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const { generateVerifyToken } = require('../services/documentTemplates');
+      const verifyToken = generateVerifyToken();
 
       // 1. Create Authoritative Payment Record
       const payment = await tx.payment.create({
@@ -621,7 +634,8 @@ exports.recordPayment = async (req, res, next) => {
           receiptNumber,
           referenceNumber: referenceNumber || null,
           receivedBy: userId,
-          remarks: remarks || null
+          remarks: remarks || null,
+          verifyToken
         }
       });
 
@@ -664,6 +678,16 @@ exports.recordPayment = async (req, res, next) => {
 
       return { payment, fee: updatedFee };
     });
+
+    if (result?.payment?.verifyToken) {
+      const { recordVerifyToken } = require('../services/verifyToken.service');
+      await recordVerifyToken({
+        token: result.payment.verifyToken,
+        collegeId: req.collegeId,
+        kind: 'receipt',
+        refId: result.payment.id
+      }).catch(err => console.error('Failed to register verifyToken for payment receipt:', err.message));
+    }
 
     res.status(201).json({
       success: true,
@@ -900,3 +924,395 @@ exports.getMyFees = async (req, res, next) => {
     res.json({ success: true, data: formatted });
   } catch (error) { next(error); }
 };
+
+// ── Phase 8: FeeStructure CRUD, Automated Generator, and Refunds ───────────────
+
+exports.getFeeStructures = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { session_id, group_id, class: cls } = req.query;
+    const sessionId = session_id || await getCurrentSessionId(tenantDb, req.collegeId);
+
+    const where = { college_id: req.collegeId };
+    if (sessionId) where.session_id = sessionId;
+    if (group_id) where.group_id = group_id;
+    if (cls) where.class = cls;
+
+    const structures = await tenantDb.feeStructure.findMany({
+      where,
+      orderBy: { createdAt: 'desc' }
+    });
+
+    res.json({ success: true, count: structures.length, data: structures });
+  } catch (error) { next(error); }
+};
+
+exports.createFeeStructure = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const sessionId = req.body.session_id || await getCurrentSessionId(tenantDb, req.collegeId);
+    if (!sessionId) {
+      return res.status(400).json({ success: false, message: 'Session ID is required' });
+    }
+
+    const {
+      group_id = null,
+      class: cls = null,
+      feeType,
+      amount,
+      dueDate,
+      installments = null,
+      lateFeePerDay = 0,
+      lateFeeCap = null
+    } = req.body;
+
+    if (!feeType || amount == null) {
+      return res.status(400).json({ success: false, message: 'Fee type and amount are required' });
+    }
+
+    const structure = await tenantDb.feeStructure.create({
+      data: {
+        college_id: req.collegeId,
+        session_id: sessionId,
+        group_id: group_id || null,
+        class: cls || null,
+        feeType: feeType.toLowerCase(),
+        amount: new Prisma.Decimal(amount),
+        dueDate: dueDate ? new Date(dueDate) : null,
+        installments: installments || null,
+        lateFeePerDay: new Prisma.Decimal(lateFeePerDay || 0),
+        lateFeeCap: lateFeeCap != null ? new Prisma.Decimal(lateFeeCap) : null,
+        isActive: true
+      }
+    });
+
+    res.status(201).json({ success: true, message: 'Fee structure created', data: structure });
+  } catch (error) { next(error); }
+};
+
+exports.updateFeeStructure = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { id } = req.params;
+
+    const data = { ...req.body };
+    if (data.amount !== undefined) data.amount = new Prisma.Decimal(data.amount);
+    if (data.lateFeePerDay !== undefined) data.lateFeePerDay = new Prisma.Decimal(data.lateFeePerDay);
+    if (data.lateFeeCap !== undefined) data.lateFeeCap = data.lateFeeCap != null ? new Prisma.Decimal(data.lateFeeCap) : null;
+    if (data.dueDate) data.dueDate = new Date(data.dueDate);
+
+    const updated = await tenantDb.feeStructure.update({
+      where: { id },
+      data
+    });
+
+    res.json({ success: true, message: 'Fee structure updated', data: updated });
+  } catch (error) { next(error); }
+};
+
+exports.deleteFeeStructure = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { id } = req.params;
+
+    await tenantDb.feeStructure.deleteMany({
+      where: { id, college_id: req.collegeId }
+    });
+
+    res.json({ success: true, message: 'Fee structure deleted' });
+  } catch (error) { next(error); }
+};
+
+/**
+ * Generator: creates Fee rows for a student from FeeStructure, applying
+ * quota discount and scholarship tier into Fee.scholarshipDeduction.
+ */
+exports.generateFeesFromStructure = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { student_id, session_id, feeStructure_id } = req.body;
+    const sessionId = session_id || await getCurrentSessionId(tenantDb, req.collegeId);
+
+    if (!student_id) {
+      return res.status(400).json({ success: false, message: 'student_id is required' });
+    }
+
+    const student = await tenantDb.student.findFirst({
+      where: { id: student_id, college_id: req.collegeId }
+    });
+    if (!student) {
+      return res.status(404).json({ success: false, message: 'Student not found' });
+    }
+
+    // Find applicable fee structures
+    const structureWhere = {
+      college_id: req.collegeId,
+      isActive: true
+    };
+    if (feeStructure_id) {
+      structureWhere.id = feeStructure_id;
+    } else {
+      if (sessionId) structureWhere.session_id = sessionId;
+      structureWhere.OR = [
+        { class: student.class },
+        { class: null },
+        { class: 'Both' }
+      ];
+    }
+
+    const structures = await tenantDb.feeStructure.findMany({ where: structureWhere });
+    if (structures.length === 0) {
+      return res.status(400).json({ success: false, message: 'No matching fee structure found for student' });
+    }
+
+    // 1. Quota Rule Discount
+    let quotaDiscountType = 'none';
+    let quotaDiscountVal = 0;
+    if (student.quota) {
+      const quotaRule = await tenantDb.quotaRule.findFirst({
+        where: { college_id: req.collegeId, code: student.quota.toLowerCase(), isActive: true }
+      });
+      if (quotaRule) {
+        quotaDiscountType = quotaRule.discountType || 'none';
+        quotaDiscountVal = Number(quotaRule.discountValue) || 0;
+      }
+    }
+
+    // 2. Scholarship Tier Discount
+    let scholarshipDiscountType = 'none';
+    let scholarshipDiscountVal = 0;
+    let scholarshipAppliesTo = ['tuition'];
+
+    if (student.application_id) {
+      const app = await tenantDb.application.findUnique({
+        where: { id: student.application_id }
+      });
+      if (app?.scholarshipTier_id) {
+        const tier = await tenantDb.scholarshipTier.findUnique({
+          where: { id: app.scholarshipTier_id }
+        });
+        if (tier) {
+          scholarshipDiscountType = tier.discountType || 'percent';
+          scholarshipDiscountVal = Number(tier.discountValue) || 0;
+          scholarshipAppliesTo = Array.isArray(tier.appliesTo) ? tier.appliesTo : ['tuition'];
+        }
+      }
+    }
+
+    const generatedFees = [];
+    const currentMonthStr = new Date().toISOString().slice(0, 7);
+
+    for (const struct of structures) {
+      const grossAmount = Number(struct.amount) || 0;
+
+      // Calculate Quota Discount
+      let quotaDeduction = 0;
+      if (quotaDiscountType === 'fixed') {
+        quotaDeduction = quotaDiscountVal;
+      } else if (quotaDiscountType === 'percent') {
+        quotaDeduction = (grossAmount * quotaDiscountVal) / 100;
+      }
+
+      // Calculate Scholarship Tier Discount
+      let scholarshipDeduction = 0;
+      if (scholarshipAppliesTo.includes(struct.feeType)) {
+        if (scholarshipDiscountType === 'fixed') {
+          scholarshipDeduction = scholarshipDiscountVal;
+        } else if (scholarshipDiscountType === 'percent') {
+          scholarshipDeduction = (grossAmount * scholarshipDiscountVal) / 100;
+        }
+      }
+
+      // Total discount applied directly into Fee.scholarshipDeduction
+      const totalDiscount = Math.min(grossAmount, quotaDeduction + scholarshipDeduction);
+      const netAmount = Math.max(0, grossAmount - totalDiscount);
+
+      // Handle Installments
+      if (Array.isArray(struct.installments) && struct.installments.length > 0) {
+        for (const inst of struct.installments) {
+          const instPercent = Number(inst.percent) || (100 / struct.installments.length);
+          const instGross = (grossAmount * instPercent) / 100;
+          const instDiscount = (totalDiscount * instPercent) / 100;
+          const instNet = Math.max(0, instGross - instDiscount);
+
+          const challanNumber = `CH-INS-${Date.now()}-${student.rollNumber || '000'}-${inst.no || 1}`;
+          const feeRow = await tenantDb.fee.create({
+            data: {
+              college_id: req.collegeId,
+              session_id: sessionId || '',
+              student_id: student.id,
+              title: `${struct.feeType.toUpperCase()} Fee (Installment ${inst.no || 1})`,
+              type: 'installment',
+              month: inst.dueDate ? new Date(inst.dueDate).toISOString().slice(0, 7) : currentMonthStr,
+              tuitionFee: struct.feeType === 'tuition' ? new Prisma.Decimal(instGross) : new Prisma.Decimal(0),
+              labFee: struct.feeType === 'lab' ? new Prisma.Decimal(instGross) : new Prisma.Decimal(0),
+              functionFee: ['admission', 'annual', 'board', 'security', 'library', 'other'].includes(struct.feeType)
+                ? new Prisma.Decimal(instGross)
+                : new Prisma.Decimal(0),
+              scholarshipDeduction: new Prisma.Decimal(instDiscount),
+              totalAmount: new Prisma.Decimal(instNet),
+              paidAmount: new Prisma.Decimal(0),
+              status: 'unpaid',
+              dueDate: inst.dueDate ? new Date(inst.dueDate) : struct.dueDate,
+              challanNumber,
+              enteredBy: req.user?.id || 'system'
+            }
+          });
+          generatedFees.push(feeRow);
+        }
+      } else {
+        // Single Fee Row
+        const challanNumber = `CH-${struct.feeType.toUpperCase()}-${Date.now()}-${student.rollNumber || '000'}`;
+        const feeRow = await tenantDb.fee.create({
+          data: {
+            college_id: req.collegeId,
+            session_id: sessionId || '',
+            student_id: student.id,
+            title: `${struct.feeType.toUpperCase()} Fee - ${struct.class || student.class}`,
+            type: struct.feeType === 'annual' ? 'yearly' : 'monthly',
+            month: struct.dueDate ? new Date(struct.dueDate).toISOString().slice(0, 7) : currentMonthStr,
+            tuitionFee: struct.feeType === 'tuition' ? new Prisma.Decimal(grossAmount) : new Prisma.Decimal(0),
+            labFee: struct.feeType === 'lab' ? new Prisma.Decimal(grossAmount) : new Prisma.Decimal(0),
+            functionFee: ['admission', 'annual', 'board', 'security', 'library', 'other'].includes(struct.feeType)
+              ? new Prisma.Decimal(grossAmount)
+              : new Prisma.Decimal(0),
+            scholarshipDeduction: new Prisma.Decimal(totalDiscount),
+            totalAmount: new Prisma.Decimal(netAmount),
+            paidAmount: new Prisma.Decimal(0),
+            status: 'unpaid',
+            dueDate: struct.dueDate,
+            challanNumber,
+            enteredBy: req.user?.id || 'system'
+          }
+        });
+        generatedFees.push(feeRow);
+      }
+    }
+
+    res.status(201).json({
+      success: true,
+      message: `Generated ${generatedFees.length} fee obligation(s) with quota & scholarship deductions applied`,
+      data: generatedFees
+    });
+  } catch (error) { next(error); }
+};
+
+// ── Fee Refunds (Through Approval Model) ──────────────────────────────────────
+
+exports.createFeeRefund = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { student_id, fee_id, payment_id, amount, reason } = req.body;
+    const userId = req.user?.id || req.user?._id || 'unknown';
+
+    if (!student_id || !amount || !reason) {
+      return res.status(400).json({ success: false, message: 'student_id, amount, and reason are required' });
+    }
+
+    const refund = await tenantDb.feeRefund.create({
+      data: {
+        college_id: req.collegeId,
+        student_id,
+        fee_id: fee_id || null,
+        payment_id: payment_id || null,
+        amount: new Prisma.Decimal(amount),
+        reason: reason.trim(),
+        status: 'pending'
+      }
+    });
+
+    // Create approval row
+    const approval = await tenantDb.approval.create({
+      data: {
+        college_id: req.collegeId,
+        type: 'fee_refund',
+        status: 'pending',
+        requestedBy: userId,
+        title: `Fee Refund Request: PKR ${amount}`,
+        description: `Refund requested for reason: ${reason.trim()}`,
+        relatedModel: 'FeeRefund',
+        relatedId: refund.id,
+        data: {
+          student_id,
+          fee_id,
+          amount: parseFloat(amount),
+          reason: reason.trim()
+        }
+      }
+    });
+
+    const updatedRefund = await tenantDb.feeRefund.update({
+      where: { id: refund.id },
+      data: { approval_id: approval.id }
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Fee refund request submitted and pending administrative approval',
+      refund: updatedRefund,
+      approval
+    });
+  } catch (error) { next(error); }
+};
+
+exports.getFeeRefunds = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { student_id, status } = req.query;
+
+    const where = { college_id: req.collegeId };
+    if (student_id) where.student_id = student_id;
+    if (status) where.status = status;
+
+    const refunds = await tenantDb.feeRefund.findMany({
+      where,
+      orderBy: { createdAt: 'desc' }
+    });
+
+    const studentIds = [...new Set(refunds.map(r => r.student_id))];
+    const students = await tenantDb.student.findMany({
+      where: { id: { in: studentIds } },
+      select: { id: true, name: true, rollNumber: true, class: true, section: true }
+    });
+    const studentMap = Object.fromEntries(students.map(s => [s.id, s]));
+
+    const formatted = refunds.map(r => ({
+      ...r,
+      amount: Number(r.amount),
+      student: studentMap[r.student_id] || null
+    }));
+
+    res.json({ success: true, count: formatted.length, data: formatted });
+  } catch (error) { next(error); }
+};
+
+/**
+ * Void a fee voucher (Admin & Principal)
+ * Used to cancel/invalidate fee vouchers. Reflected on public verify immediately.
+ */
+exports.voidFee = async (req, res, next) => {
+  try {
+    const tenantDb = req.tenantClient;
+    const { id } = req.params;
+
+    const fee = await tenantDb.fee.findFirst({
+      where: { id, college_id: req.collegeId }
+    });
+
+    if (!fee) {
+      return res.status(404).json({ success: false, code: 'NOT_FOUND', message: 'Fee voucher not found' });
+    }
+
+    const updated = await tenantDb.fee.update({
+      where: { id },
+      data: { status: 'void' }
+    });
+
+    res.json({
+      success: true,
+      message: 'Fee voucher voided successfully',
+      data: updated
+    });
+  } catch (error) { next(error); }
+};
+

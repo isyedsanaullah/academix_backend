@@ -9,4 +9,10 @@ router.get('/current', authorize('admin', 'principal', 'registrar', 'teacher', '
 router.route('/').get(authorize('admin', 'principal', 'registrar'), getSessions).post(authorize('admin'), createSession);
 router.route('/:id').put(authorize('admin'), updateSession).delete(authorize('admin'), deleteSession);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Core academic structure: academic sessions"
+};
+
 module.exports = router;

@@ -8,4 +8,10 @@ router.post('/register', protect, register);
 router.get('/me', protect, getMe);
 router.put('/update-password', protect, updatePassword);
 
+
+router.meta = {
+  "exempt": "auth",
+  "reason": "Authentication and session handling for all users"
+};
+
 module.exports = router;

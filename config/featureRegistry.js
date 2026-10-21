@@ -204,7 +204,7 @@ validateRegistryDAG(FEATURE_REGISTRY);
  */
 function resolveCollegeFeatures(rawPlanId, rawOverrides = {}) {
   const planId = normalizePlanId(rawPlanId);
-  const planAllowed = PLAN_FEATURES[planId] || PLAN_FEATURES.basic;
+  const planAllowed = PLAN_FEATURES[planId] || PLAN_FEATURES.starter || PLAN_FEATURES.basic;
   const overrides = (typeof rawOverrides === 'object' && rawOverrides !== null) ? rawOverrides : {};
 
   // Step 1: Base candidate state calculation

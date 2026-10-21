@@ -11,7 +11,8 @@
     "prisma:push": "prisma db push",
     "seed": "node seeders/seed.js",
     "seed:fresh": "node seeders/seed.js --clear",
-    "seed:wipe": "node seeders/seed.js --wipe"
+    "seed:wipe": "node seeders/seed.js --wipe",
+    "test:entitlements": "node tests/entitlements.test.js && node tests/customPlan.test.js && node tests/adapter.test.js && node tests/routeCoverage.test.js && node tests/phase4.test.js && node tests/phase5.test.js && node tests/phase6.test.js && node tests/phase7.test.js && node tests/phase8.test.js && node tests/phase9.test.js && node tests/phase10.test.js"
   },
   "keywords": [],
   "author": "",
@@ -41,7 +42,9 @@
     "pdf-parse": "^2.4.5",
     "pdfkit": "^0.19.1",
     "pg": "^8.21.0",
-    "prisma": "^7.8.0"
+    "prisma": "^7.8.0",
+    "qrcode": "^1.5.4",
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "nodemon": "^3.1.7"

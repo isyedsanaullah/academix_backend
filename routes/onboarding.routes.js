@@ -19,4 +19,10 @@ router.post('/step-2', saveStep2Academic);
 router.post('/step-3', saveStep3Staff);
 router.post('/complete', completeOnboarding);
 
+
+router.meta = {
+  "exempt": "core",
+  "reason": "Initial college onboarding setup"
+};
+
 module.exports = router;

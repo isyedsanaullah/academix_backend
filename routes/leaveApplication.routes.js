@@ -15,4 +15,5 @@ router.get('/', authorize('admin', 'principal', 'registrar'), getLeaveApplicatio
 router.get('/stats', authorize('admin', 'principal'), getLeaveStats);
 router.put('/:id/review', authorize('admin', 'principal'), reviewLeave);
 
+router.meta = { exempt: 'core', reason: 'students, teachers and staff all use it and approved leave writes Attendance' };
 module.exports = router;

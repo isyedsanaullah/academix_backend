@@ -24,12 +24,21 @@ const {
   computeChecksum,
   toR2Reference,
 } = require('../services/storageService');
+const { getSystemClient } = require('../config/prismaManager');
+const { consume, getCollegeLimit } = require('../services/quota');
+const {
+  optimizeImage,
+  createStudentThumbnail,
+  getCacheControlHeader,
+  MAX_IMAGE_FILE_SIZE,
+} = require('../services/mediaOptimizer');
 
 // ── Allowed categories (maps to object key path segments) ────────────
 const VALID_CATEGORIES = [
   'college', 'students', 'staff', 'documents', 'notices',
   'assignments', 'attachments', 'applications', 'avatars',
-  'visitors', 'leaves', 'general',
+  'visitors', 'leaves', 'general', 'image', 'signatures',
+  'stamps', 'logos', 'payment-proofs',
 ];
 
 /**
@@ -212,6 +221,23 @@ exports.finalizeUpload = async (req, res, next) => {
       });
     }
 
+    // ── Check storage quota ──────────────────────────────────────────
+    const finalSizeBytes = objectMeta.contentLength || storedFile.sizeBytes;
+    const sysDb = getSystemClient();
+    const storageLimit = await getCollegeLimit(sysDb, collegeId, 'storageBytes');
+    const quotaResult = await consume(sysDb, collegeId, 'storageBytes', finalSizeBytes, storageLimit);
+    if (!quotaResult.allowed) {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        message: 'Quota exceeded for storageBytes',
+        metric: 'storageBytes'
+      });
+    }
+    if (quotaResult.warning) {
+      res.setHeader('X-Quota-Warning', `storageBytes quota at 80%+ (${quotaResult.value}/${quotaResult.limit})`);
+    }
+
     // ── Mark as ready ────────────────────────────────────────────────
     const updatedFile = await tenantDb.storedFile.update({
       where: { id: fileId },
@@ -288,14 +314,60 @@ exports.directUpload = async (req, res, next) => {
     }
 
     const sanitizedName = sanitizeFilename(req.file.originalname);
-    const objectKey = generateObjectKey(collegeId, category, entityId, req.file.originalname);
-    const checksum = computeChecksum(req.file.buffer);
 
-    // Upload to R2
+    let finalBuffer = req.file.buffer;
+    let finalContentType = req.file.mimetype;
+    let finalSize = req.file.size;
+    let thumbStoredFile = null;
+
+    // ── Media optimization for images ───────────────────────────────
+    if (fileTypeCategory === 'image') {
+      if (req.file.size > MAX_IMAGE_FILE_SIZE) {
+        return res.status(400).json({
+          success: false,
+          code: 'FILE_TOO_LARGE',
+          message: 'Image size exceeds maximum allowed 5 MB',
+        });
+      }
+
+      const shouldRemoveBg = req.body.removeBackground === 'true' || req.body.removeBackground === true;
+      const opt = await optimizeImage(req.file.buffer, {
+        entityType,
+        category,
+        removeBackground: shouldRemoveBg,
+      });
+
+      finalBuffer = opt.buffer;
+      finalContentType = opt.contentType;
+      finalSize = opt.sizeBytes;
+    }
+
+    // ── Storage quota consumption ───────────────────────────────────
+    const sysDb = getSystemClient();
+    const storageLimit = await getCollegeLimit(sysDb, collegeId, 'storageBytes');
+    const quotaResult = await consume(sysDb, collegeId, 'storageBytes', finalSize, storageLimit);
+    if (!quotaResult.allowed) {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        message: 'Quota exceeded for storageBytes',
+        metric: 'storageBytes',
+      });
+    }
+    if (quotaResult.warning) {
+      res.setHeader('X-Quota-Warning', `storageBytes quota at 80%+ (${quotaResult.value}/${quotaResult.limit})`);
+    }
+
+    const cacheControl = getCacheControlHeader(entityType, category);
+    const objectKey = generateObjectKey(collegeId, category, entityId, sanitizedName);
+    const checksum = computeChecksum(finalBuffer);
+
+    // Upload main file to R2
     await uploadObject({
       objectKey,
-      body: req.file.buffer,
-      contentType: req.file.mimetype,
+      body: finalBuffer,
+      contentType: finalContentType,
+      cacheControl,
     });
 
     // Create ready record
@@ -305,8 +377,8 @@ exports.directUpload = async (req, res, next) => {
         uploadedById: userId,
         objectKey,
         originalFilename: sanitizedName,
-        contentType: req.file.mimetype,
-        sizeBytes: req.file.size,
+        contentType: finalContentType,
+        sizeBytes: finalSize,
         checksumSha256: checksum,
         category,
         entityType: entityType || null,
@@ -315,6 +387,51 @@ exports.directUpload = async (req, res, next) => {
       },
     });
 
+    // ── Student photo: generate and store 96px thumbnail ────────────
+    if (fileTypeCategory === 'image' && (entityType === 'Student' || category === 'avatars' || category === 'students')) {
+      try {
+        const thumb = await createStudentThumbnail(req.file.buffer);
+        const thumbKey = generateObjectKey(collegeId, 'avatars', entityId || 'thumb', `thumb_${sanitizedName}.webp`);
+        await uploadObject({
+          objectKey: thumbKey,
+          body: thumb.buffer,
+          contentType: thumb.contentType,
+          cacheControl: 'private, max-age=3600',
+        });
+
+        thumbStoredFile = await tenantDb.storedFile.create({
+          data: {
+            college_id: collegeId,
+            uploadedById: userId,
+            objectKey: thumbKey,
+            originalFilename: `thumb_${sanitizedName}.webp`,
+            contentType: thumb.contentType,
+            sizeBytes: thumb.sizeBytes,
+            checksumSha256: computeChecksum(thumb.buffer),
+            category: 'avatars',
+            entityType: 'Student',
+            entityId: entityId || null,
+            status: 'ready',
+          },
+        });
+
+        // If entityId refers to a student, link photo and photoThumb
+        if (entityId) {
+          await tenantDb.student.update({
+            where: { id: entityId },
+            data: {
+              photo: toR2Reference(storedFile.id),
+              photoThumb: toR2Reference(thumbStoredFile.id),
+            },
+          }).catch(() => {
+            // Non-fatal if student record not found by entityId
+          });
+        }
+      } catch (thumbErr) {
+        console.warn('[directUpload] Thumbnail generation warning:', thumbErr.message);
+      }
+    }
+
     res.status(201).json({
       success: true,
       message: 'File uploaded successfully.',
@@ -322,6 +439,11 @@ exports.directUpload = async (req, res, next) => {
         ...storedFile,
         _id: storedFile.id,
         r2Ref: toR2Reference(storedFile.id),
+        thumbnail: thumbStoredFile ? {
+          ...thumbStoredFile,
+          _id: thumbStoredFile.id,
+          r2Ref: toR2Reference(thumbStoredFile.id),
+        } : null,
       },
     });
   } catch (error) {
