@@ -41,6 +41,7 @@ const defaultAllowedOrigins = [
   'http://localhost:3001',
   'http://localhost:3002',
   'http://localhost:5173',
+  'https://collegeshub.org',
   'http://127.0.0.1:3000',
   'http://127.0.0.1:5173',
   ...rawClientUrls
@@ -73,6 +74,7 @@ if (process.env.NODE_ENV === 'development') {
 // ─── Routes ───────────────────────────────────────────
 // Auth & Platform
 app.use('/api/auth', require('./routes/auth.routes'));
+app.use('/api/me', require('./routes/me.routes'));
 app.use('/api/super-admin', require('./routes/superAdmin.routes'));
 app.use('/api/superadmin', require('./routes/superAdmin.routes'));
 

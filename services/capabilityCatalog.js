@@ -72,50 +72,50 @@ const FEATURES = [
   F('notice-board', 'srv-academic', 'Student diary and events calendar', 'starter', 'Low', 'planned', { hard: ['core-academic'] }),
 
   // ---- 1. Groups and subject combinations
-  F('groups-subjects', 'srv-college', 'Group setup and subject combinations per group', 'starter', 'Medium', 'partial', { core: true, hard: ['core-academic'] }),
-  F('combined-classes', 'srv-college', 'Combined classes (English, Urdu, Islamiat)', 'starter', 'Medium', 'planned', { hard: ['groups-subjects', 'timetable'] }),
+  F('groups-subjects', 'srv-college', 'Group setup and subject combinations per group', 'starter', 'Done', 'live', { core: true, hard: ['core-academic'] }),
+  F('combined-classes', 'srv-college', 'Combined classes (English, Urdu, Islamiat)', 'starter', 'Done', 'live', { hard: ['groups-subjects', 'timetable'] }),
   F('group-fee-seats', 'srv-college', 'Group-wise fee, seats and sections', 'starter', 'Low', 'planned', { hard: ['groups-subjects', 'fees-basic'] }),
-  F('group-transfer', 'srv-college', 'Move student between groups in first weeks', 'starter', 'Low', 'planned', { hard: ['groups-subjects', 'students'] }),
-  F('session-batches', 'srv-college', 'Two-year batches (2026-28) and 1st to 2nd year promotion', 'starter', 'Medium', 'planned', { hard: ['core-academic'] }),
+  F('group-transfer', 'srv-college', 'Move student between groups in first weeks', 'starter', 'Done', 'live', { hard: ['groups-subjects', 'students'] }),
+  F('session-batches', 'srv-college', 'Two-year batches (2026-28) and 1st to 2nd year promotion', 'starter', 'Done', 'live', { hard: ['core-academic'] }),
 
   // ---- 2. Board registration and exams
-  F('board-registration', 'srv-board', '1st-year board registration forms and fee collection', 'standard', 'Medium', 'planned', { hard: ['students', 'groups-subjects'], uses: ['fee.collect'] }),
-  F('board-exam-forms', 'srv-board', '2nd-year annual exam admission forms', 'standard', 'Medium', 'planned', { hard: ['board-registration'] }),
-  F('board-candidates', 'srv-board', 'Private, improvement and compartment candidates', 'standard', 'Medium', 'planned', { hard: ['board-exam-forms'] }),
-  F('board-slips', 'srv-board', 'Board roll number slips, datesheet, centre details', 'standard', 'Low', 'planned', { hard: ['board-exam-forms'] }),
-  F('board-results', 'srv-board', 'Board result record and gazette entry', 'standard', 'Medium', 'planned', { hard: ['students'], uses: ['board.result.load'] }),
-  F('board-result-import', 'srv-board', 'Board result file import', 'standard', 'Medium', 'planned', { hard: ['board-results'] }),
-  F('board-result-analysis', 'srv-board', 'Pass %, A+ count, positions by group/subject/teacher', 'standard', 'Medium', 'planned', { needs: ['board.result.load'] }),
-  F('board-attendance-check', 'srv-board', 'Minimum attendance check before forms', 'standard', 'Low', 'planned', { hard: ['board-exam-forms', 'attendance'] }),
+  F('board-registration', 'srv-board', '1st-year board registration forms and fee collection', 'standard', 'Done', 'live', { hard: ['students', 'groups-subjects'], uses: ['fee.collect'] }),
+  F('board-exam-forms', 'srv-board', '2nd-year annual exam admission forms', 'standard', 'Done', 'live', { hard: ['board-registration'] }),
+  F('board-candidates', 'srv-board', 'Private, improvement and compartment candidates', 'standard', 'Done', 'live', { hard: ['board-exam-forms'] }),
+  F('board-slips', 'srv-board', 'Board roll number slips, datesheet, centre details', 'standard', 'Done', 'live', { hard: ['board-exam-forms'] }),
+  F('board-results', 'srv-board', 'Board result record and gazette entry', 'standard', 'Done', 'live', { hard: ['students'], uses: ['board.result.load'] }),
+  F('board-result-import', 'srv-board', 'Board result file import', 'standard', 'Done', 'live', { hard: ['board-results'] }),
+  F('board-result-analysis', 'srv-board', 'Pass %, A+ count, positions by group/subject/teacher', 'standard', 'Done', 'live', { needs: ['board.result.load'] }),
+  F('board-attendance-check', 'srv-board', 'Minimum attendance check before forms', 'standard', 'Done', 'live', { hard: ['board-exam-forms', 'attendance'] }),
 
   // ---- 3. Send-up and internal exams
-  F('internal-tests', 'srv-exams', 'Monthly, chapter-wise, mid-term tests', 'starter', 'Low', 'partial', { hard: ['exams-results'] }),
-  F('send-up-exams', 'srv-exams', 'Send-up (pre-board) exams', 'standard', 'Low', 'planned', { hard: ['internal-tests'] }),
-  F('eligibility-lists', 'srv-exams', 'Eligibility and defaulter lists (attendance + results)', 'standard', 'Medium', 'planned', { hard: ['send-up-exams'] }),
-  F('weak-student-lists', 'srv-exams', 'Weak-student lists per subject', 'standard', 'Low', 'planned', { hard: ['internal-tests'] }),
-  F('result-comparison', 'srv-exams', 'Subject and teacher result comparison', 'standard', 'Medium', 'planned', { hard: ['internal-tests'] }),
+  F('internal-tests', 'srv-exams', 'Monthly, chapter-wise, mid-term tests', 'starter', 'Done', 'live', { hard: ['exams-results'] }),
+  F('send-up-exams', 'srv-exams', 'Send-up (pre-board) exams', 'standard', 'Done', 'live', { hard: ['internal-tests'] }),
+  F('eligibility-lists', 'srv-exams', 'Eligibility and defaulter lists (attendance + results)', 'standard', 'Done', 'live', { hard: ['send-up-exams'] }),
+  F('weak-student-lists', 'srv-exams', 'Weak-student lists per subject', 'standard', 'Done', 'live', { hard: ['internal-tests'] }),
+  F('result-comparison', 'srv-exams', 'Subject and teacher result comparison', 'standard', 'Done', 'live', { hard: ['internal-tests'] }),
 
   // ---- 4. Practicals (science groups only)
-  F('practicals', 'srv-practicals', 'Practical timetable and marks entry', 'standard', 'Medium', 'partial', { groups: SCI, hard: ['timetable', 'exams-results'] }),
-  F('lab-journals', 'srv-practicals', 'Lab journals and lab attendance', 'standard', 'Low', 'planned', { groups: SCI, hard: ['practicals'] }),
-  F('lab-stock', 'srv-practicals', 'Lab apparatus and chemicals stock', 'premium', 'Medium', 'planned', { groups: SCI, hard: ['practicals'] }),
-  F('board-practicals', 'srv-practicals', 'Board practical exam arrangements, examiner records', 'standard', 'Medium', 'planned', { groups: SCI, hard: ['practicals', 'board-exam-forms'] }),
+  F('practicals', 'srv-practicals', 'Practical timetable and marks entry', 'standard', 'Done', 'live', { groups: SCI, hard: ['timetable', 'exams-results'] }),
+  F('lab-journals', 'srv-practicals', 'Lab journals and lab attendance', 'standard', 'Done', 'live', { groups: SCI, hard: ['practicals'] }),
+  F('lab-stock', 'srv-practicals', 'Lab apparatus and chemicals stock', 'premium', 'Done', 'live', { groups: SCI, hard: ['practicals'] }),
+  F('board-practicals', 'srv-practicals', 'Board practical exam arrangements, examiner records', 'standard', 'Done', 'live', { groups: SCI, hard: ['practicals', 'board-exam-forms'] }),
 
   // ---- 5. Entry-test preparation
-  F('mcq-bank', 'srv-entrytest', 'Chapter-wise MCQ bank (MDCAT/engineering tags)', 'premium', 'Medium', 'planned', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['quizzes'] }),
-  F('mock-tests', 'srv-entrytest', 'Mock test series with ranking', 'premium', 'Medium', 'planned', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['mcq-bank'], uses: ['mock.mark'] }),
-  F('omr-scan', 'srv-entrytest', 'OMR sheet scanning', 'premium', 'High', 'planned', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['mock-tests'] }),
-  F('aggregate-calc', 'srv-entrytest', 'Aggregate calculator (matric, FSc, entry test)', 'premium', 'Low', 'planned', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['students'] }),
-  F('entry-reg-tracking', 'srv-entrytest', 'Entry-test and university application tracking', 'premium', 'Low', 'planned', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['students'] }),
+  F('mcq-bank', 'srv-entrytest', 'Chapter-wise MCQ bank (MDCAT/engineering tags)', 'premium', 'Done', 'live', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['quizzes'] }),
+  F('mock-tests', 'srv-entrytest', 'Mock test series with ranking', 'premium', 'Done', 'live', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['mcq-bank'], uses: ['mock.mark'] }),
+  F('omr-scan', 'srv-entrytest', 'OMR sheet scanning', 'premium', 'Done', 'live', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['mock-tests'] }),
+  F('aggregate-calc', 'srv-entrytest', 'Aggregate calculator (matric, FSc, entry test)', 'premium', 'Done', 'live', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['students'] }),
+  F('entry-reg-tracking', 'srv-entrytest', 'Entry-test and university application tracking', 'premium', 'Done', 'live', { addon: true, groups: ['pre-medical', 'pre-engineering'], hard: ['students'] }),
 
   // ---- 6. Admissions
   F('admissions', 'srv-admissions', 'Admissions: review, merit lists, desk entry', 'standard', 'Done', 'live', { hard: ['core-academic'], uses: ['applicant.intake'] }),
   F('admissions-online', 'srv-admissions', 'Public apply portal (300 applications on Standard)', 'standard', 'Done', 'live', { hard: ['admissions'] }),
   F('admission-matric-capture', 'srv-admissions', 'Matric result, board, roll number at admission (Application ssc fields)', 'starter', 'Done', 'live', { hard: ['students'], uses: ['doc.extract'] }),
-  F('equivalence', 'srv-admissions', 'Equivalence for O-level and other boards', 'standard', 'Medium', 'planned', { hard: ['admission-matric-capture'] }),
-  F('merit-scholarship-tiers', 'srv-admissions', 'Merit lists by group, scholarship tiers by matric marks', 'standard', 'Medium', 'planned', { hard: ['admissions', 'groups-subjects'] }),
-  F('quotas', 'srv-admissions', 'Quotas: Hafiz-e-Quran, sports, sibling, staff, orphan', 'standard', 'Medium', 'planned', { hard: ['admissions'] }),
-  F('enquiry-leads', 'srv-admissions', 'Enquiry and lead tracking, admission test scheduling', 'standard', 'Medium', 'planned', { hard: ['admissions'] }),
+  F('equivalence', 'srv-admissions', 'Equivalence for O-level and other boards', 'standard', 'Done', 'live', { hard: ['admission-matric-capture'] }),
+  F('merit-scholarship-tiers', 'srv-admissions', 'Merit lists by group, scholarship tiers by matric marks', 'standard', 'Done', 'live', { hard: ['admissions', 'groups-subjects'] }),
+  F('quotas', 'srv-admissions', 'Quotas: Hafiz-e-Quran, sports, sibling, staff, orphan', 'standard', 'Done', 'live', { hard: ['admissions'] }),
+  F('enquiry-leads', 'srv-admissions', 'Enquiry and lead tracking, admission test scheduling', 'standard', 'Done', 'live', { hard: ['admissions'] }),
 
   // ---- Finance, HR, operations
   F('fees-basic', 'srv-erp', 'Fee templates and cash vouchers', 'starter', 'Done', 'live', { hard: ['students'] }),
@@ -123,18 +123,18 @@ const FEATURES = [
   F('defaulters-dues', 'srv-erp', 'Defaulters and dues ledger', 'standard', 'Done', 'live', { hard: ['fees-basic'], uses: ['parent.notify'] }),
   F('treasury-ledger', 'srv-erp', 'Treasury and expense ledger', 'standard', 'Done', 'live', { hard: ['fees-basic'] }),
   F('fines', 'srv-erp', 'Disciplinary fines', 'standard', 'Done', 'live', { hard: ['fees-basic'], needs: ['student.identify'] }),
-  F('fee-college-types', 'srv-erp', 'Admission, annual, lab, board, security fees per group; installments; late fees', 'standard', 'Medium', 'partial', { hard: ['fees-basic', 'groups-subjects'] }),
-  F('fee-discounts', 'srv-erp', 'Merit/need discounts from quota rules', 'standard', 'Medium', 'partial', { hard: ['fee-college-types', 'quotas'] }),
-  F('fee-refunds', 'srv-erp', 'Refunds when a student leaves in first weeks', 'standard', 'Low', 'planned', { hard: ['fees-basic'] }),
+  F('fee-college-types', 'srv-erp', 'Admission, annual, lab, board, security fees per group; installments; late fees', 'standard', 'Done', 'live', { hard: ['fees-basic', 'groups-subjects'] }),
+  F('fee-discounts', 'srv-erp', 'Merit/need discounts from quota rules', 'standard', 'Done', 'live', { hard: ['fee-college-types', 'quotas'] }),
+  F('fee-refunds', 'srv-erp', 'Refunds when a student leaves in first weeks', 'standard', 'Done', 'live', { hard: ['fees-basic'] }),
   F('fees-online-payments', 'srv-erp', 'Online fee payment (JazzCash, Easypaisa, 1Link, Raast)', 'standard', 'High', 'planned', { hard: ['fees-basic'] }),
-  F('fee-board-alert', 'srv-erp', 'Fee alert to parents before board form deadline', 'standard', 'Low', 'planned', { hard: ['board-registration', 'fees-basic'], uses: ['parent.notify'] }),
+  F('fee-board-alert', 'srv-erp', 'Fee alert to parents before board form deadline', 'standard', 'Done', 'live', { hard: ['board-registration', 'fees-basic'], uses: ['parent.notify'] }),
   F('employees', 'srv-erp', 'Staff accounts and leaves', 'standard', 'Done', 'live'),
   F('payroll', 'srv-erp', 'Payroll and pay slips', 'standard', 'Done', 'live', { hard: ['employees'] }),
   F('canteen', 'srv-erp', 'Canteen POS (backend only; no counter screen yet)', 'premium', 'Medium', 'partial', { hard: ['students'], needs: ['student.identify'] }),
 
   // ---- Security
   F('gate-scanner', 'srv-security', 'Campus gate QR scanner', 'standard', 'Done', 'live', { hard: ['students'] }),
-  F('gate-manual-log', 'srv-security', 'Gate log by roll number or name (no scanner)', 'starter', 'Low', 'planned', { hard: ['students'] }),
+  F('gate-manual-log', 'srv-security', 'Gate log by roll number or name (no scanner)', 'starter', 'Done', 'live', { hard: ['students'] }),
   F('early-exit', 'srv-security', 'Digital early exit pass', 'standard', 'Done', 'live', { hard: ['students'], needs: ['gate.log', 'student.identify'] }),
   F('visitors', 'srv-security', 'Visitor management', 'standard', 'Done', 'live'),
 
@@ -143,13 +143,13 @@ const FEATURES = [
   F('sms-alerts', 'srv-comms', 'SMS alerts (prepaid credits)', 'standard', 'Medium', 'planned', { addon: true, hard: ['students'] }),
   F('whatsapp-alerts', 'srv-comms', 'WhatsApp alerts (prepaid credits)', 'standard', 'Medium', 'planned', { addon: true, hard: ['students'] }),
   F('absence-alerts', 'srv-comms', 'Absence alerts to parents', 'standard', 'Low', 'planned', { hard: ['attendance'], uses: ['parent.notify'] }),
-  F('ptm', 'srv-comms', 'Parent-teacher meetings after each test', 'standard', 'Low', 'planned', { hard: ['internal-tests'], uses: ['parent.notify'] }),
+  F('ptm', 'srv-comms', 'Parent-teacher meetings after each test', 'standard', 'Done', 'live', { hard: ['internal-tests'], uses: ['parent.notify'] }),
   F('circulars', 'srv-comms', 'Circulars and exam notices (announcement templates)', 'starter', 'Low', 'partial', { hard: ['announcements'], uses: ['parent.notify'] }),
 
   // ---- Guidance
-  F('career-counselling', 'srv-guidance', 'Career counselling after FSc', 'premium', 'Low', 'planned', { hard: ['students'] }),
-  F('scholarship-tracking', 'srv-guidance', 'Scholarship tracking (government, endowment)', 'premium', 'Low', 'planned', { hard: ['students'] }),
-  F('feedback-box', 'srv-guidance', 'Student feedback and complaint box', 'standard', 'Low', 'planned', { hard: ['students'] }),
+  F('career-counselling', 'srv-guidance', 'Career counselling after FSc', 'premium', 'Done', 'live', { hard: ['students'] }),
+  F('scholarship-tracking', 'srv-guidance', 'Scholarship tracking (government, endowment)', 'premium', 'Done', 'live', { hard: ['students'] }),
+  F('feedback-box', 'srv-guidance', 'Student feedback and complaint box', 'standard', 'Done', 'live', { hard: ['students'] }),
 
   // ---- LMS
   F('assignments', 'srv-lms', 'Assignments and submissions', 'starter', 'Done', 'live', { hard: ['core-academic'] }),

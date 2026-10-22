@@ -35,143 +35,147 @@ function createMockRes() {
   return res;
 }
 
-async function runTests() {
-  console.log('--- Starting Phase 13 Test Suite: Public Verification of Certificates, Vouchers and Receipts ---');
+describe('Phase 13: Public Verification of Certificates, Vouchers and Receipts', () => {
+  let sysDb;
+  let testToken;
+  let invoiceToken;
+  let testInvoiceId;
 
-  // Test 1: Capability Catalog verification
-  const qrVerifyFeat = FEATURES.find(f => f.key === 'qr-verify');
-  assert(qrVerifyFeat, 'qr-verify feature must exist in capabilityCatalog');
-  assert.strictEqual(qrVerifyFeat.status, 'live', 'qr-verify status must be live');
-  assert.strictEqual(qrVerifyFeat.effort, 'Done', 'qr-verify effort must be Done');
-  assert(qrVerifyFeat.hard.includes('certificates'), 'qr-verify must depend on certificates');
-  assert(qrVerifyFeat.hard.includes('doc-templates'), 'qr-verify must depend on doc-templates');
-
-  const voucherVerifyFeat = FEATURES.find(f => f.key === 'voucher-verify');
-  assert(voucherVerifyFeat, 'voucher-verify feature must exist in capabilityCatalog');
-  assert.strictEqual(voucherVerifyFeat.status, 'live', 'voucher-verify status must be live');
-  assert.strictEqual(voucherVerifyFeat.effort, 'Done', 'voucher-verify effort must be Done');
-  assert(voucherVerifyFeat.hard.includes('paid-receipt'), 'voucher-verify must depend on paid-receipt');
-  console.log('✓ 1. Catalog features qr-verify and voucher-verify verified live and Done');
-
-  // Test 2: Schema verification
-  const schemaContent = fs.readFileSync(path.join(__dirname, '../prisma/schema.prisma'), 'utf8');
-  assert(schemaContent.includes('model VerifyToken'), 'VerifyToken model must exist in schema.prisma');
-  assert(schemaContent.includes('model VerifyLog'), 'VerifyLog model must exist in schema.prisma');
-  console.log('✓ 2. Prisma schema verified with VerifyToken and VerifyLog models');
-
-  // Test 3: VerifyToken Service (record, lookup, IP hash)
-  const testToken = `test-tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const testIp = '192.168.1.100';
-  const hashed = hashIp(testIp);
-  assert.strictEqual(typeof hashed, 'string', 'Hashed IP must be a string');
-  assert.strictEqual(hashed.length, 64, 'Hashed IP must be a 64-char SHA-256 hex string');
-
-  const recorded = await recordVerifyToken({
-    token: testToken,
-    collegeId: 'college-test-123',
-    kind: 'certificate',
-    refId: 'cert-test-456'
-  });
-  assert(recorded, 'recordVerifyToken must return created record');
-  assert.strictEqual(recorded.token, testToken);
-  assert.strictEqual(recorded.kind, 'certificate');
-
-  const lookedUp = await lookupVerifyToken(testToken);
-  assert(lookedUp, 'lookupVerifyToken must find recorded token');
-  assert.strictEqual(lookedUp.college_id, 'college-test-123');
-  assert.strictEqual(lookedUp.ref_id, 'cert-test-456');
-
-  const logResult = await logVerifyAttempt({
-    token: testToken,
-    ip: testIp,
-    userAgent: 'Mozilla/5.0 Test Suite',
-    status: 'VERIFIED'
-  });
-  assert(logResult, 'logVerifyAttempt must create VerifyLog entry');
-  assert.strictEqual(logResult.tokenPrefix, testToken.slice(0, 8), 'VerifyLog must only store token prefix');
-  assert.strictEqual(logResult.ipHash, hashed, 'VerifyLog must store hashed IP');
-  console.log('✓ 3. VerifyToken service verified (record, single-query lookup, IP hash & abuse log)');
-
-  // Test 4: Uniform 404 Response & Rate-Limit / Security Headers
-  const invalidReq1 = { params: { token: 'short' }, ip: '127.0.0.1', get: () => 'TestAgent' };
-  const mockRes1 = createMockRes();
-  await verifyPublicDocument(invalidReq1, mockRes1, () => {});
-  assert.strictEqual(mockRes1.statusCode, 404, 'Short token must return 404');
-  assert.strictEqual(mockRes1.headers['Cache-Control'], 'no-store', 'Cache-Control must be no-store');
-  assert.strictEqual(mockRes1.body?.code, 'NOT_FOUND', 'Response code must be NOT_FOUND');
-
-  const invalidReq2 = { params: { token: 'nonexistent-token-123456789' }, ip: '127.0.0.1', get: () => 'TestAgent' };
-  const mockRes2 = createMockRes();
-  await verifyPublicDocument(invalidReq2, mockRes2, () => {});
-  assert.strictEqual(mockRes2.statusCode, 404, 'Unknown token must return 404');
-  assert.strictEqual(mockRes2.headers['Cache-Control'], 'no-store', 'Cache-Control must be no-store');
-  // Both responses must be identical
-  assert.deepStrictEqual(mockRes1.body, mockRes2.body, 'All 404 responses must be completely uniform');
-  console.log('✓ 4. Uniform 404 response verified for invalid, malformed, and missing tokens with Cache-Control: no-store');
-
-  // Test 5: Platform Invoice Verification via VerifyToken
-  const invoiceToken = `test-inv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const sysDb = getSystemClient();
-  const testInvoice = await sysDb.platformInvoice.create({
-    data: {
-      college_id: 'sample-col-inv',
-      invoiceNo: `PINV-TEST-${Date.now()}`,
-      periodStart: new Date('2026-10-01'),
-      periodEnd: new Date('2026-10-31'),
-      amount: 15000,
-      status: 'paid',
-      paidAt: new Date(),
-      verifyToken: invoiceToken
-    }
+  beforeAll(() => {
+    sysDb = getSystemClient();
+    testToken = `test-tok-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    invoiceToken = `test-inv-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   });
 
-  await recordVerifyToken({
-    token: invoiceToken,
-    collegeId: 'sample-col-inv',
-    kind: 'invoice',
-    refId: testInvoice.id
+  afterAll(async () => {
+    // Cleanup
+    if (testInvoiceId) await sysDb.platformInvoice.delete({ where: { id: testInvoiceId } }).catch(() => {});
+    await sysDb.verifyToken.delete({ where: { token: invoiceToken } }).catch(() => {});
+    await sysDb.verifyToken.delete({ where: { token: testToken } }).catch(() => {});
   });
 
-  const invoiceReq = { params: { token: invoiceToken }, ip: '127.0.0.1', get: () => 'TestAgent' };
-  const invoiceRes = createMockRes();
-  await verifyPublicDocument(invoiceReq, invoiceRes, () => {});
-  assert.strictEqual(invoiceRes.statusCode, 200, 'Invoice verify must return 200');
-  assert.strictEqual(invoiceRes.body?.success, true);
-  assert.strictEqual(invoiceRes.body?.kind, 'invoice');
-  assert.strictEqual(invoiceRes.body?.status, 'PAID');
-  assert.strictEqual(invoiceRes.body?.document?.invoiceNumber, testInvoice.invoiceNo);
-  console.log('✓ 5. Platform Invoice verified with status PAID and invoice details');
+  test('1. Catalog: qr-verify and voucher-verify are live and Done', () => {
+    const qrVerifyFeat = FEATURES.find(f => f.key === 'qr-verify');
+    expect(qrVerifyFeat).toBeTruthy();
+    expect(qrVerifyFeat.status).toBe('live');
+    expect(qrVerifyFeat.effort).toBe('Done');
+    expect(qrVerifyFeat.hard).toContain('certificates');
+    expect(qrVerifyFeat.hard).toContain('doc-templates');
 
-  // Test 6: Office Verification via fallback.controller.js (token & voucherNumber)
-  assert(typeof fallbackController.verifyDocument === 'function', 'verifyDocument must be exported');
-  console.log('✓ 6. Office verification endpoint in fallback.controller.js verified');
+    const voucherVerifyFeat = FEATURES.find(f => f.key === 'voucher-verify');
+    expect(voucherVerifyFeat).toBeTruthy();
+    expect(voucherVerifyFeat.status).toBe('live');
+    expect(voucherVerifyFeat.effort).toBe('Done');
+    expect(voucherVerifyFeat.hard).toContain('paid-receipt');
+  });
 
-  // Test 7: Public verify route file existence and rate limiter
-  const publicRoutesContent = fs.readFileSync(path.join(__dirname, '../routes/public.routes.js'), 'utf8');
-  assert(publicRoutesContent.includes("router.get('/verify/:token'"), 'public.routes.js must mount /verify/:token');
-  assert(publicRoutesContent.includes('verifyRateLimiter'), 'public.routes.js must apply verifyRateLimiter');
-  assert(publicRoutesContent.includes('verifyPublicDocument'), 'public.routes.js must call verifyPublicDocument');
-  console.log('✓ 7. Public route /api/public/verify/:token mounted with 30 req/min rate limiter');
+  test('2. Prisma schema has VerifyToken and VerifyLog models', () => {
+    const schemaContent = fs.readFileSync(path.join(__dirname, '../prisma/schema.prisma'), 'utf8');
+    expect(schemaContent).toContain('model VerifyToken');
+    expect(schemaContent).toContain('model VerifyLog');
+  });
 
-  // Test 8: Frontend page existence
-  const frontendVerifyPage = path.join(__dirname, '../../client-next/app/verify/[token]/page.js');
-  assert(fs.existsSync(frontendVerifyPage), 'Next.js verification page /verify/[token]/page.js must exist');
-  const frontendContent = fs.readFileSync(frontendVerifyPage, 'utf8');
-  assert(frontendContent.includes('DocumentVerificationPage'), 'Verification page component must be defined');
-  assert(frontendContent.includes('api/public/verify/'), 'Verification page must query /api/public/verify/:token');
-  console.log('✓ 8. Frontend Next.js page at client-next/app/verify/[token]/page.js verified');
+  test('3. VerifyToken service: record, lookup, IP hash and abuse log', async () => {
+    const testIp = '192.168.1.100';
+    const hashed = hashIp(testIp);
+    expect(typeof hashed).toBe('string');
+    expect(hashed).toHaveLength(64); // SHA-256 hex
 
-  // Cleanup test invoice
-  await sysDb.platformInvoice.delete({ where: { id: testInvoice.id } }).catch(() => {});
-  await sysDb.verifyToken.delete({ where: { token: invoiceToken } }).catch(() => {});
-  await sysDb.verifyToken.delete({ where: { token: testToken } }).catch(() => {});
+    const recorded = await recordVerifyToken({
+      token: testToken,
+      collegeId: 'college-test-123',
+      kind: 'certificate',
+      refId: 'cert-test-456'
+    });
+    expect(recorded).toBeTruthy();
+    expect(recorded.token).toBe(testToken);
+    expect(recorded.kind).toBe('certificate');
 
-  console.log('\n======================================================');
-  console.log('✅ ALL PHASE 13 TESTS PASSED SUCCESSFULLY (100%)');
-  console.log('======================================================\n');
-}
+    const lookedUp = await lookupVerifyToken(testToken);
+    expect(lookedUp).toBeTruthy();
+    expect(lookedUp.college_id).toBe('college-test-123');
+    expect(lookedUp.ref_id).toBe('cert-test-456');
 
-runTests().catch(err => {
-  console.error('\n❌ PHASE 13 TEST SUITE FAILED:', err);
-  process.exit(1);
+    const logResult = await logVerifyAttempt({
+      token: testToken,
+      ip: testIp,
+      userAgent: 'Mozilla/5.0 Test Suite',
+      status: 'VERIFIED'
+    });
+    expect(logResult).toBeTruthy();
+    expect(logResult.tokenPrefix).toBe(testToken.slice(0, 8));
+    expect(logResult.ipHash).toBe(hashed);
+  });
+
+  test('4. Uniform 404 for invalid / unknown tokens with Cache-Control: no-store', async () => {
+    // Short (malformed) token
+    const invalidReq1 = { params: { token: 'short' }, ip: '127.0.0.1', get: () => 'TestAgent' };
+    const mockRes1 = createMockRes();
+    await verifyPublicDocument(invalidReq1, mockRes1, () => {});
+    expect(mockRes1.statusCode).toBe(404);
+    expect(mockRes1.headers['Cache-Control']).toBe('no-store');
+    expect(mockRes1.body?.code).toBe('NOT_FOUND');
+
+    // Unknown but valid-format token
+    const invalidReq2 = { params: { token: 'nonexistent-token-123456789' }, ip: '127.0.0.1', get: () => 'TestAgent' };
+    const mockRes2 = createMockRes();
+    await verifyPublicDocument(invalidReq2, mockRes2, () => {});
+    expect(mockRes2.statusCode).toBe(404);
+    expect(mockRes2.headers['Cache-Control']).toBe('no-store');
+
+    // Both responses must be identical (uniform 404 — no oracle)
+    expect(mockRes1.body).toEqual(mockRes2.body);
+  });
+
+  test('5. Platform Invoice verification returns PAID with correct details', async () => {
+    const testInvoice = await sysDb.platformInvoice.create({
+      data: {
+        college_id: 'sample-col-inv',
+        invoiceNo: `PINV-TEST-${Date.now()}`,
+        periodStart: new Date('2026-10-01'),
+        periodEnd: new Date('2026-10-31'),
+        amount: 15000,
+        status: 'paid',
+        paidAt: new Date(),
+        verifyToken: invoiceToken
+      }
+    });
+    testInvoiceId = testInvoice.id;
+
+    await recordVerifyToken({
+      token: invoiceToken,
+      collegeId: 'sample-col-inv',
+      kind: 'invoice',
+      refId: testInvoice.id
+    });
+
+    const invoiceReq = { params: { token: invoiceToken }, ip: '127.0.0.1', get: () => 'TestAgent' };
+    const invoiceRes = createMockRes();
+    await verifyPublicDocument(invoiceReq, invoiceRes, () => {});
+
+    expect(invoiceRes.statusCode).toBe(200);
+    expect(invoiceRes.body?.success).toBe(true);
+    expect(invoiceRes.body?.kind).toBe('invoice');
+    expect(invoiceRes.body?.status).toBe('PAID');
+    expect(invoiceRes.body?.document?.invoiceNumber).toBe(testInvoice.invoiceNo);
+  });
+
+  test('6. Office verification endpoint exported from fallback.controller.js', () => {
+    expect(typeof fallbackController.verifyDocument).toBe('function');
+  });
+
+  test('7. Public route /api/public/verify/:token mounted with rate limiter', () => {
+    const publicRoutesContent = fs.readFileSync(path.join(__dirname, '../routes/public.routes.js'), 'utf8');
+    expect(publicRoutesContent).toContain("router.get('/verify/:token'");
+    expect(publicRoutesContent).toContain('verifyRateLimiter');
+    expect(publicRoutesContent).toContain('verifyPublicDocument');
+  });
+
+  test('8. Frontend Next.js page /verify/[token]/page.js exists and is correct', () => {
+    const frontendVerifyPage = path.join(__dirname, '../../client-next/app/verify/[token]/page.js');
+    expect(fs.existsSync(frontendVerifyPage)).toBe(true);
+    const frontendContent = fs.readFileSync(frontendVerifyPage, 'utf8');
+    expect(frontendContent).toContain('DocumentVerificationPage');
+    expect(frontendContent).toContain('api/public/verify/');
+  });
 });
