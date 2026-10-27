@@ -118,7 +118,7 @@ exports.login = async (req, res, next) => {
         return res.status(401).json({ success: false, message: 'Invalid credentials' });
       }
 
-      // If tenant slug is provided, user must belong to this specific college
+      // If tenant slug is provided (subdomain), user must belong to this specific college
       if (tenantSlug) {
         const userCollege = await prisma.college.findUnique({
           where: { id: user.college_id },
@@ -132,6 +132,18 @@ exports.login = async (req, res, next) => {
         const collegeSlug = (userCollege.slug || userCollege.code).toLowerCase();
         if (collegeSlug !== tenantSlug) {
           return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
+      }
+
+      // If a college ID is asserted by the client (code-based login on root domain),
+      // validate it server-side so a direct API call cannot bypass the college isolation.
+      const expectedCollegeId = (req.headers['x-expected-college-id'] || '').trim();
+      if (expectedCollegeId) {
+        if (!user.college_id || user.college_id !== expectedCollegeId) {
+          return res.status(403).json({
+            success: false,
+            message: 'Access denied: Your account does not belong to this institution.'
+          });
         }
       }
     }
