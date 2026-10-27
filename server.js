@@ -55,38 +55,52 @@ app.use(cors({
     if (!origin) return callback(null, true);
 
     const rootDomain = (process.env.ROOT_DOMAIN || 'collegeshub.org').toLowerCase();
+    const cleanOrigin = origin.trim().toLowerCase();
 
-    // 1. Check explicit default / configured origins
-    const isExplicitlyAllowed = defaultAllowedOrigins.some(o => o.toLowerCase() === origin.toLowerCase());
-    if (isExplicitlyAllowed || origin.toLowerCase() === `https://${rootDomain}`) {
+    // 1. Direct match for root domain and www
+    if (
+      cleanOrigin === `https://${rootDomain}` ||
+      cleanOrigin === `http://${rootDomain}` ||
+      cleanOrigin === `https://www.${rootDomain}` ||
+      cleanOrigin === `http://www.${rootDomain}` ||
+      cleanOrigin === 'https://collegeshub.org' ||
+      cleanOrigin === 'http://collegeshub.org'
+    ) {
       return callback(null, true);
     }
 
-    // 2. Check local dev subdomains (e.g. http://fmc.localhost:3000, http://admin.localhost:3000)
-    const localhostSubdomainMatch = origin.match(/^https?:\/\/([a-z0-9-]+)\.localhost(?::\d+)?$/i);
-    if (localhostSubdomainMatch) {
-      const sub = localhostSubdomainMatch[1].toLowerCase();
-      if (sub === 'admin' || isValidSlug(sub)) {
-        return callback(null, true);
-      }
+    // 2. Explicit defaults / CLIENT_URL
+    const isExplicitlyAllowed = defaultAllowedOrigins.some(o => o.toLowerCase() === cleanOrigin);
+    if (isExplicitlyAllowed) {
+      return callback(null, true);
     }
 
-    // 3. Dynamic origin check against root domain (*.collegeshub.org)
+    // 3. Localhost and local dev subdomains
+    if (
+      cleanOrigin.includes('localhost') ||
+      cleanOrigin.includes('127.0.0.1')
+    ) {
+      return callback(null, true);
+    }
+
+    // 4. Wildcard subdomains (*.collegeshub.org or *.ROOT_DOMAIN)
     const escapedRoot = rootDomain.replace(/\./g, '\\.');
-    const domainRegex = new RegExp(`^https:\\/\\/([a-z0-9-]+)\\.${escapedRoot}$`, 'i');
-    const match = origin.match(domainRegex);
-    if (match) {
-      const subdomain = match[1].toLowerCase();
-      if (subdomain === 'www' || subdomain === 'admin' || isValidSlug(subdomain)) {
-        return callback(null, true);
-      }
+    const domainRegex = new RegExp(`^https?:\\/\\/([a-z0-9-]+)\\.${escapedRoot}$`, 'i');
+    if (domainRegex.test(cleanOrigin)) {
+      return callback(null, true);
+    }
+
+    // 5. Vercel deployment preview domains
+    if (/^https:\/\/[a-zA-Z0-9_-]+\.vercel\.app$/.test(cleanOrigin)) {
+      return callback(null, true);
     }
 
     if (process.env.CORS_ALLOW_ALL === 'true') {
       return callback(null, true);
     }
 
-    callback(new Error(`CORS blocked for origin: ${origin}`));
+    // If not allowed, pass false instead of throwing unhandled Error
+    return callback(null, false);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
