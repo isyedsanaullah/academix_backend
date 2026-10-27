@@ -536,9 +536,18 @@ exports.resolveRoutingCode = async (req, res, next) => {
       },
       select: {
         id: true,
+        name: true,
         slug: true,
         code: true,
-        status: true
+        status: true,
+        logo: true,
+        address: true,
+        city: true,
+        phone: true,
+        email: true,
+        website: true,
+        tagline: true,
+        settings: true
       }
     });
 
@@ -549,10 +558,26 @@ exports.resolveRoutingCode = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Invalid code' });
     }
 
+    const coverPhoto = college.settings?.coverPhoto || null;
+
     return res.json({
       success: true,
       type: 'college',
-      slug: college.slug
+      slug: college.slug,
+      college: {
+        id: college.id,
+        name: college.name,
+        code: college.code,
+        slug: college.slug,
+        logo: college.logo,
+        coverPhoto,
+        address: college.address,
+        city: college.city,
+        phone: college.phone,
+        email: college.email,
+        website: college.website,
+        tagline: college.tagline || college.settings?.tagline || null
+      }
     });
   } catch (error) {
     next(error);
