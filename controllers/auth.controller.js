@@ -154,8 +154,9 @@ exports.login = async (req, res, next) => {
       description: `${user.name} logged in successfully.`
     }).catch(e => console.error('Activity log error:', e.message));
 
-    // Populate college details
+    // Populate college details (Super Admin has user.college_id = null)
     let college = null;
+    if (user.college_id) {
       college = await prisma.college.findUnique({
         where: { id: user.college_id },
         select: {
@@ -185,6 +186,7 @@ exports.login = async (req, res, next) => {
         const ent = await getEntitlements(user.college_id);
         college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
+    }
 
     const token = generateToken(user.id, user.college_id || null, user.role);
 
