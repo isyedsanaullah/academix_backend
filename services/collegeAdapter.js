@@ -81,7 +81,37 @@ function fromCollege(college, { groupNames = [], includePlanned = false, now = n
     }
   }
 
-  const overrides = parseOverrides(sub.featureOverrides, now);
+  // If college has active subscription period with features snapshot, incorporate it
+  const periods = Array.isArray(college.subscriptionPeriods) ? college.subscriptionPeriods : [];
+  const activePeriod = periods.find(p => p.status === 'active' || (p.status !== 'cancelled' && new Date(p.starts_at) <= now && new Date(p.expires_at) >= now));
+  if (activePeriod && activePeriod.features) {
+    let pFeatures = activePeriod.features;
+    if (typeof pFeatures === 'string') {
+      try { pFeatures = JSON.parse(pFeatures); } catch (_) {}
+    }
+    const rawKeys = Array.isArray(pFeatures)
+      ? pFeatures
+      : (pFeatures && typeof pFeatures === 'object'
+        ? (Array.isArray(pFeatures.keys) ? pFeatures.keys : Object.entries(pFeatures).filter(([, v]) => Boolean(v)).map(([k]) => k))
+        : []);
+
+    if (rawKeys.length > 0) {
+      planKeys = new Set();
+      for (const rk of rawKeys) {
+        for (const key of expandKey(rk)) {
+          if (catalogKeys.has(key) && (includePlanned || FEATURES.find(f => f.key === key)?.status !== 'planned')) {
+            planKeys.add(key);
+          }
+        }
+      }
+    }
+  }
+
+  const combinedOverrides = {
+    ...(sub.featureOverrides || {}),
+    ...(college.feature_overrides && typeof college.feature_overrides === 'object' ? college.feature_overrides : {})
+  };
+  const overrides = parseOverrides(combinedOverrides, now);
 
   if (flags) {
     const flagEntries = (flags instanceof Map || typeof flags.entries === 'function')
@@ -115,7 +145,7 @@ function fromCollege(college, { groupNames = [], includePlanned = false, now = n
     : (settings.programs || settings.groupsOffered || []).map(p => (typeof p === 'string' ? p : p?.name));
   const groups = [...new Set(names.map(normalizeGroup).filter(Boolean))];
 
-  const status = String(sub.status || 'active').toUpperCase();
+  const status = String(college.subscription_status || sub.status || 'active').toUpperCase();
   const known = ['TRIAL', 'ACTIVE', 'PAST_DUE', 'GRACE', 'SUSPENDED', 'EXPIRED'];
 
   return {

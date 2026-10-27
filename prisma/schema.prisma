@@ -379,28 +379,105 @@ model Group {
 }
 
 model College {
-  id               String   @id @default(uuid())
+  id               String    @id @default(uuid())
   name             String
-  code             String   @unique
-  slug             String?  @unique
-  mongoUrl         String?  @default("")
-  email            String   @unique
+  code             String    @unique
+  slug             String?   @unique
+  status           String?   @default("pending_setup") // pending_setup, onboarding, active, suspended
+  onboarding_state Json?     @default("{}")
+  activated_at     DateTime?
+  tagline          String?
+  about            String?
+  social_links     Json?
+  established_year Int?
+  affiliation      String?
+  logo_key         String?
+  cover_key        String?
+  gallery          Json?     @default("[]")
+  mongoUrl         String?   @default("")
+  email            String    @unique
   phone            String?
   address          String?
   city             String?
-  logo             String?  @default("")
-  website          String?  @default("")
+  logo             String?   @default("")
+  website          String?   @default("")
   subscription     Json?
   settings         Json?
-  onboardingStatus String?  @default("completed") // pending_invite, registered, in_progress, completed
-  onboardingStep   Int?     @default(1)
-  totalStudents    Int?     @default(0)
-  totalStaff       Int?     @default(0)
-  isActive         Boolean? @default(true)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  onboardingStatus String?   @default("completed") // legacy: pending_invite, registered, in_progress, completed
+  onboardingStep       Int?                 @default(1)
+  totalStudents        Int?                 @default(0)
+  totalStaff           Int?                 @default(0)
+  isActive             Boolean?             @default(true)
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+  subscription_status  String?              @default("active") // active, grace, suspended
+  grace_until          DateTime?
+  feature_overrides    Json?                @default("{}")
+  invites              CollegeInvite[]
+  subscriptionPeriods  SubscriptionPeriod[]
+  message_deliveries   MessageDelivery[]
 
+  @@index([status])
   @@index([subscription(path: "status")])
+}
+
+model CollegeInvite {
+  id           String    @id @default(uuid())
+  college_id   String
+  email        String
+  token_hash   String    @unique
+  expires_at   DateTime
+  used_at      DateTime?
+  revoked_at   DateTime?
+  created_by   String?
+  created_at   DateTime  @default(now())
+  email_status String    @default("queued") // queued, sent, failed
+  email_error  String?
+  college      College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id])
+  @@index([token_hash])
+  @@index([expires_at])
+}
+
+model SubscriptionPeriod {
+  id                  String    @id @default(uuid())
+  college_id          String
+  plan                String
+  features            Json
+  starts_at           DateTime
+  expires_at          DateTime
+  status              String    @default("active") // scheduled, active, expired, cancelled
+  amount_note         String?
+  payment_note        String?
+  created_by          String?
+  created_at          DateTime  @default(now())
+  reason              String?
+  reminded_thresholds String[]  @default([])
+  college             College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id])
+  @@index([status])
+}
+
+model MessageDelivery {
+  id                String    @id @default(uuid())
+  college_id        String
+  announcement_id   String?
+  recipient_user_id String
+  recipient_email   String?
+  recipient_role    String?
+  subject           String?
+  content           String?
+  channel           String    // in_app, email
+  status            String    @default("queued") // queued, sent, failed
+  error             String?
+  sent_at           DateTime?
+  created_at        DateTime  @default(now())
+  college           College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id])
+  @@index([status])
 }
 
 model CollegeInvitation {
@@ -1278,19 +1355,46 @@ model DocumentChunk {
 }
 
 model SubscriptionRequest {
-  id           String    @id @default(uuid())
-  collegeName  String
-  adminEmail   String
-  phone        String
-  selectedPlan String
-  studentCount Int
-  message      String?
-  status       String    @default("new") // new, contacted, in_review, approved, rejected, converted
-  notes        String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
-  reviewedAt   DateTime?
-  reviewedBy   String?
+  id               String                     @id @default(uuid())
+  collegeName      String
+  adminEmail       String
+  phone            String
+  selectedPlan     String
+  studentCount     Int
+  message          String?
+  status           String                     @default("new") // new, contacted, approved, rejected
+  notes            String?
+  internal_notes   String?
+  contacted_at     DateTime?
+  contacted_by     String?
+  rejected_at      DateTime?
+  rejected_by      String?
+  rejection_reason String?
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+  reviewedAt       DateTime?
+  reviewedBy       String?
+  events           SubscriptionRequestEvent[]
+
+  @@index([status])
+  @@index([adminEmail])
+  @@index([createdAt])
+}
+
+model SubscriptionRequestEvent {
+  id          String              @id @default(uuid())
+  request_id  String
+  type        String              // status_change, note_added, contacted, rejected, approved
+  from_status String?
+  to_status   String?
+  note        String?
+  actor_id    String?
+  actor_name  String?
+  created_at  DateTime            @default(now())
+  request     SubscriptionRequest @relation(fields: [request_id], references: [id], onDelete: Cascade)
+
+  @@index([request_id])
+  @@index([created_at])
 }
 
 /// Central file metadata for all R2-managed uploads.
@@ -1950,5 +2054,38 @@ model StudentFeedback {
   updatedAt  DateTime @updatedAt
 
   @@index([college_id, status])
+}
+
+// ── Phase 6: Student Bulk Import Batches & Rows ──
+model ImportBatch {
+  id         String           @id @default(uuid())
+  college_id String
+  created_by String?
+  filename   String
+  total      Int              @default(0)
+  created    Int              @default(0)
+  skipped    Int              @default(0)
+  failed     Int              @default(0)
+  status     String           @default("completed") // pending, processing, completed, failed
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  rows       ImportBatchRow[]
+
+  @@index([college_id, createdAt(sort: Desc)])
+}
+
+model ImportBatchRow {
+  id        String      @id @default(uuid())
+  batch_id  String
+  row_no    Int
+  row_hash  String?
+  status    String      // created, skipped, failed
+  message   String?
+  data      Json?
+  createdAt DateTime    @default(now())
+  batch     ImportBatch @relation(fields: [batch_id], references: [id], onDelete: Cascade)
+
+  @@index([batch_id, status])
+  @@index([batch_id, row_no])
 }
 

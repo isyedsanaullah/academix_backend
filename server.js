@@ -1,4 +1,4 @@
-// ─── Academix Server Main ──────────────────────────────
+// ─── Collegeshub Server Main ──────────────────────────────
 // Prisma Client refreshed for Announcement status schema
 const express = require('express');
 const cors = require('cors');
@@ -12,6 +12,7 @@ const { initAnnouncementScheduler } = require('./services/announcementScheduler'
 const { initTrashCleanupScheduler } = require('./services/trashCleanupScheduler');
 const { initFileCleanupScheduler } = require('./services/fileCleanupScheduler');
 const errorHandler = require('./middleware/errorHandler');
+const { globalSecurityHeaders } = require('./middleware/securityHeaders');
 
 // Load env vars
 dotenv.config();
@@ -47,22 +48,57 @@ const defaultAllowedOrigins = [
   ...rawClientUrls
 ];
 
+const { isValidSlug } = require('./utils/reservedSlugs');
+
 app.use(cors({
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
 
-    const isExplicitlyAllowed = defaultAllowedOrigins.some(o => o.toLowerCase() === origin.toLowerCase());
-    const isVercelDomain = /^https:\/\/[a-zA-Z0-9_-]+\.vercel\.app$/.test(origin);
+    const rootDomain = (process.env.ROOT_DOMAIN || 'collegeshub.org').toLowerCase();
 
-    if (isExplicitlyAllowed || isVercelDomain || process.env.CORS_ALLOW_ALL === 'true') {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS blocked for origin: ${origin}`));
+    // 1. Check explicit default / configured origins
+    const isExplicitlyAllowed = defaultAllowedOrigins.some(o => o.toLowerCase() === origin.toLowerCase());
+    if (isExplicitlyAllowed || origin.toLowerCase() === `https://${rootDomain}`) {
+      return callback(null, true);
     }
+
+    // 2. Check local dev subdomains (e.g. http://fmc.localhost:3000, http://admin.localhost:3000)
+    const localhostSubdomainMatch = origin.match(/^https?:\/\/([a-z0-9-]+)\.localhost(?::\d+)?$/i);
+    if (localhostSubdomainMatch) {
+      const sub = localhostSubdomainMatch[1].toLowerCase();
+      if (sub === 'admin' || isValidSlug(sub)) {
+        return callback(null, true);
+      }
+    }
+
+    // 3. Dynamic origin check against root domain (*.collegeshub.org)
+    const escapedRoot = rootDomain.replace(/\./g, '\\.');
+    const domainRegex = new RegExp(`^https:\\/\\/([a-z0-9-]+)\\.${escapedRoot}$`, 'i');
+    const match = origin.match(domainRegex);
+    if (match) {
+      const subdomain = match[1].toLowerCase();
+      if (subdomain === 'www' || subdomain === 'admin' || isValidSlug(subdomain)) {
+        return callback(null, true);
+      }
+    }
+
+    if (process.env.CORS_ALLOW_ALL === 'true') {
+      return callback(null, true);
+    }
+
+    callback(new Error(`CORS blocked for origin: ${origin}`));
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept']
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Requested-With',
+    'Accept',
+    'X-Tenant-Slug',
+    'X-Host-Type',
+    'X-Cron-Secret'
+  ]
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -71,14 +107,25 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
+// ─── Global Security Headers (Phase 8) ────────────────────
+app.use(globalSecurityHeaders);
+
 // ─── Routes ───────────────────────────────────────────
 // Auth & Platform
+const { authLimiter, sensitiveActionLimiter } = require('./middleware/rateLimit');
+app.use('/api/auth/login', authLimiter);
+app.use('/api/auth/verify-email', sensitiveActionLimiter);
+app.use('/api/auth/resend-verification', sensitiveActionLimiter);
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/me', require('./routes/me.routes'));
 app.use('/api/super-admin', require('./routes/superAdmin.routes'));
 app.use('/api/superadmin', require('./routes/superAdmin.routes'));
+// Phase 8: Scheduled cron job endpoints (secret-protected)
+app.use('/api/cron', require('./routes/cron.routes'));
 
 // College Core
+app.use('/api/admin/onboarding', require('./routes/onboarding.routes'));
+app.use('/api/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/colleges/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/colleges', require('./routes/college.routes'));
 app.use('/api/sessions', require('./routes/session.routes'));
@@ -169,7 +216,7 @@ app.use(errorHandler);
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Academix Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
+  console.log(`🚀 Collegeshub Server running on port ${PORT} in ${process.env.NODE_ENV} mode`);
 });
 
 module.exports = app;

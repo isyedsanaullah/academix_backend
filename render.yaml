@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: academix-backend
+    name: collegeshub-backend
     env: node
     plan: free
     buildCommand: npm install && npx prisma generate
@@ -28,3 +28,63 @@ services:
         sync: false
       - key: EMAIL_PASS
         sync: false
+      - key: CRON_SECRET
+        generateValue: true
+      - key: ROOT_DOMAIN
+        value: collegeshub.org
+      - key: SUPER_ADMIN_EMAIL
+        sync: false
+      - key: MAIL_FROM
+        sync: false
+
+  # ─── Phase 8 Cron Jobs ───────────────────────────────────────────────────────
+  - type: cron
+    name: collegeshub-nudge-stalled-onboarding
+    env: node
+    schedule: "0 8 * * *"   # Every day at 08:00 UTC
+    buildCommand: ""
+    startCommand: >
+      curl -s -X POST https://api.collegeshub.org/api/cron/nudge-stalled-onboarding
+        -H "X-Cron-Secret: $CRON_SECRET" || true
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: collegeshub-invite-expiry-reminder
+    env: node
+    schedule: "0 7 * * *"   # Every day at 07:00 UTC
+    buildCommand: ""
+    startCommand: >
+      curl -s -X POST https://api.collegeshub.org/api/cron/invite-expiry-reminder
+        -H "X-Cron-Secret: $CRON_SECRET" || true
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
+  - type: cron
+    name: collegeshub-cleanup-expired-tokens
+    env: node
+    schedule: "0 3 * * *"   # Every day at 03:00 UTC (low traffic)
+    buildCommand: ""
+    startCommand: >
+      curl -s -X POST https://api.collegeshub.org/api/cron/cleanup-expired-tokens
+        -H "X-Cron-Secret: $CRON_SECRET" || true
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
+  # ─── Phase 9 Cron Jobs ───────────────────────────────────────────────────────
+  - type: cron
+    name: collegeshub-subscription-reminders
+    env: node
+    schedule: "0 6 * * *"   # Every day at 06:00 UTC
+    buildCommand: ""
+    startCommand: >
+      curl -s -X POST https://api.collegeshub.org/api/cron/subscription-reminders
+        -H "X-Cron-Secret: $CRON_SECRET" || true
+    envVars:
+      - key: CRON_SECRET
+        sync: false
+
+

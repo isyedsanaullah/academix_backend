@@ -1,10 +1,18 @@
+'use strict';
+const { scrubSensitiveData } = require('./securityHeaders');
+
 const errorHandler = (err, req, res, next) => {
   let error = { ...err };
   error.message = err.message;
 
-  // Log error for dev
-  if (process.env.NODE_ENV === 'development') {
-    console.error('❌ Error:', err);
+  // Log error — always scrub sensitive fields before writing to logs
+  if (process.env.NODE_ENV !== 'test') {
+    const safeMsg = scrubSensitiveData(err.message || 'Unknown error');
+    const safeUrl = scrubSensitiveData(req.url || '');
+    console.error(`❌ Error [${req.method} ${safeUrl}]:`, safeMsg);
+    if (process.env.NODE_ENV === 'development' && err.stack) {
+      console.error(scrubSensitiveData(err.stack));
+    }
   }
 
   // Mongoose bad ObjectId

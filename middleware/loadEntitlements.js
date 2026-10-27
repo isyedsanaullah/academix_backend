@@ -39,7 +39,22 @@ async function getEntitlements(collegeId) {
   const hit = cache.get(collegeId);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.resolved;
   const db = getSystemClient();
-  const college = await db.college.findUnique({ where: { id: collegeId }, select: { id: true, isActive: true, subscription: true, settings: true } });
+  const college = await db.college.findUnique({
+    where: { id: collegeId },
+    select: {
+      id: true,
+      isActive: true,
+      subscription: true,
+      settings: true,
+      subscription_status: true,
+      feature_overrides: true,
+      subscriptionPeriods: {
+        where: { status: 'active' },
+        orderBy: { starts_at: 'desc' },
+        take: 1
+      }
+    }
+  });
   if (!college) return { active: false, reason: 'COLLEGE_NOT_FOUND' };
   // groups: prefer the Group table (live), fall back to onboarding settings
   const groups = await db.group.findMany({ where: { college_id: collegeId, isActive: true }, select: { name: true }, distinct: ['name'] });

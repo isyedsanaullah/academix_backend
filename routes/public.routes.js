@@ -1,5 +1,13 @@
 const router = require('express').Router();
-const { getColleges, getCollegePage, submitApplication, checkStatus } = require('../controllers/public.controller');
+const {
+  getColleges,
+  getCollegePage,
+  submitApplication,
+  checkStatus,
+  getTenantPublicProfile,
+  resolveRoutingCode
+} = require('../controllers/public.controller');
+const { resolveCodeLimiter } = require('../middleware/rateLimit');
 const { submitSubscriptionRequest, submitContactForm } = require('../controllers/subscriptionRequest.controller');
 const multer = require('multer');
 const path = require('path');
@@ -12,8 +20,10 @@ const storage = multer.diskStorage({
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
 
 const { verifyInvitationToken, acceptInvitation } = require('../controllers/invitation.controller');
+const { getInviteStatus, acceptInvite } = require('../controllers/publicInvite.controller');
 const { verifyPublicDocument } = require('../controllers/verify.controller');
 const rateLimit = require('express-rate-limit');
+const { noReferrer } = require('../middleware/securityHeaders');
 
 const verifyRateLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -92,6 +102,8 @@ const checkOnlineAdmissions = async (req, res, next) => {
 // Public routes — no authentication required
 router.get('/colleges', getColleges);
 router.get('/college/:code', getCollegePage);
+router.get('/tenant/:slug', getTenantPublicProfile);
+router.post('/resolve-code', resolveCodeLimiter, resolveRoutingCode);
 router.post('/apply/:code', applyRateLimiter, checkOnlineAdmissions, upload.fields([
   { name: 'photo', maxCount: 1 },
   { name: 'sscDMC', maxCount: 1 },
@@ -108,6 +120,20 @@ router.post('/invitations/accept', invitationRateLimiter, acceptInvitation);
 
 // Public Document Verification (30 req/min per IP rate limit)
 router.get('/verify/:token', verifyRateLimiter, verifyPublicDocument);
+
+// Phase 4 — College Admin Invite (SHA-256 hashed token from Phase 3 provisioning)
+const inviteSetupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 20,
+  message: { success: false, message: 'Too many requests. Please try again shortly.' }
+});
+router.get('/invites/:token', inviteSetupLimiter, noReferrer, getInviteStatus);
+router.post('/invites/:token/accept', inviteSetupLimiter, noReferrer, acceptInvite);
+
+// Phase 6 — Staff Set Password (3-day single-use token)
+const { getSetPasswordStatus, submitSetPassword } = require('../controllers/staffInvite.controller');
+router.get('/set-password/:token', inviteSetupLimiter, noReferrer, getSetPasswordStatus);
+router.post('/set-password/:token', inviteSetupLimiter, noReferrer, submitSetPassword);
 
 router.meta = { exempt: 'public', reason: 'Public portal; apply endpoint gated per-college' };
 module.exports = router;

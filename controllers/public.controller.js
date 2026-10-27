@@ -1,4 +1,5 @@
 // ─── Public Controller (Multi-DB with Prisma) ───────────────────
+const crypto = require('crypto');
 const { getSystemClient, getTenantClient } = require('../config/prismaManager');
 const { verifyFirebaseToken } = require('../config/firebaseAdmin');
 const { consume, getCollegeLimit } = require('../services/quota');
@@ -50,6 +51,14 @@ exports.getCollegePage = async (req, res, next) => {
 
     if (!college) {
       return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    if (college.status === 'suspended' || college.subscription_status === 'suspended') {
+      return res.status(503).json({
+        success: false,
+        code: 'COLLEGE_SUSPENDED',
+        message: 'This college portal is temporarily unavailable. Please check back later.'
+      });
     }
 
     let season = null;
@@ -381,6 +390,170 @@ exports.checkStatus = async (req, res, next) => {
     }
 
     res.status(404).json({ success: false, message: 'Application not found' });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Get public tenant profile by slug
+ * @route   GET /api/public/tenant/:slug
+ * @access  Public (cached)
+ */
+exports.getTenantPublicProfile = async (req, res, next) => {
+  try {
+    const rawSlug = req.params.slug;
+    if (!rawSlug || typeof rawSlug !== 'string') {
+      return res.status(400).json({ success: false, message: 'Invalid slug parameter' });
+    }
+
+    const slug = rawSlug.trim().toLowerCase();
+    const systemDb = getSystemClient();
+
+    const college = await systemDb.college.findFirst({
+      where: {
+        OR: [
+          { slug: { equals: slug, mode: 'insensitive' } },
+          { code: { equals: slug, mode: 'insensitive' } }
+        ]
+      },
+      select: {
+        id: true,
+        name: true,
+        code: true,
+        slug: true,
+        status: true,
+        tagline: true,
+        about: true,
+        address: true,
+        city: true,
+        phone: true,
+        email: true,
+        website: true,
+        social_links: true,
+        established_year: true,
+        affiliation: true,
+        logo: true,
+        logo_key: true,
+        cover_key: true,
+        settings: true,
+        subscription_status: true
+      }
+    });
+
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    if (college.status === 'suspended' || college.subscription_status === 'suspended') {
+      return res.status(503).json({
+        success: false,
+        code: 'COLLEGE_SUSPENDED',
+        message: 'This college portal is temporarily unavailable. Please check back later.'
+      });
+    }
+
+    // Brief caching for performance
+    res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
+
+    const coverPhoto = college.settings?.coverPhoto || null;
+
+    res.json({
+      success: true,
+      data: {
+        id: college.id,
+        name: college.name,
+        code: college.code,
+        slug: college.slug || college.code.toLowerCase(),
+        status: college.status || 'active',
+        tagline: college.tagline || college.settings?.tagline || null,
+        about: college.about || college.settings?.about || null,
+        address: college.address,
+        city: college.city,
+        phone: college.phone,
+        email: college.email,
+        website: college.website,
+        socialLinks: college.social_links || college.settings?.socialLinks || null,
+        establishedYear: college.established_year || college.settings?.establishedYear || null,
+        affiliation: college.affiliation,
+        logo: college.logo,
+        logoKey: college.logo_key,
+        coverPhoto,
+        coverKey: college.cover_key,
+        gallery: college.gallery || []
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Resolve routing code from root login (Super Admin code vs College code)
+ * @route   POST /api/public/resolve-code
+ * @access  Public (strict rate-limited)
+ */
+exports.resolveRoutingCode = async (req, res, next) => {
+  const startTime = Date.now();
+  try {
+    const { code } = req.body;
+    if (!code || typeof code !== 'string' || !code.trim()) {
+      // Pad timing to match DB query duration
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return res.status(404).json({ success: false, message: 'Invalid code' });
+    }
+
+    const inputCode = code.trim();
+    const superAdminCode = process.env.SUPER_ADMIN_ROUTING_CODE || 'superadmin-secure-routing-2026';
+
+    // 1. Constant-time check for super admin routing code
+    const inputBuf = Buffer.from(inputCode);
+    const targetBuf = Buffer.from(superAdminCode);
+
+    let isSuperAdmin = false;
+    if (inputBuf.length === targetBuf.length) {
+      isSuperAdmin = crypto.timingSafeEqual(inputBuf, targetBuf);
+    }
+
+    if (isSuperAdmin) {
+      // Ensure consistent response time
+      const elapsed = Date.now() - startTime;
+      if (elapsed < 80) await new Promise(resolve => setTimeout(resolve, 80 - elapsed));
+      return res.json({
+        success: true,
+        type: 'super-admin'
+      });
+    }
+
+    // 2. Database lookup for college code or slug
+    const systemDb = getSystemClient();
+    const college = await systemDb.college.findFirst({
+      where: {
+        OR: [
+          { code: { equals: inputCode, mode: 'insensitive' } },
+          { slug: { equals: inputCode.toLowerCase(), mode: 'insensitive' } }
+        ]
+      },
+      select: {
+        id: true,
+        slug: true,
+        code: true,
+        status: true
+      }
+    });
+
+    const elapsed = Date.now() - startTime;
+    if (elapsed < 80) await new Promise(resolve => setTimeout(resolve, 80 - elapsed));
+
+    if (!college || !college.slug) {
+      return res.status(404).json({ success: false, message: 'Invalid code' });
+    }
+
+    return res.json({
+      success: true,
+      type: 'college',
+      slug: college.slug
+    });
   } catch (error) {
     next(error);
   }

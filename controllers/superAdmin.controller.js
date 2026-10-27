@@ -167,15 +167,33 @@ exports.getColleges = async (req, res, next) => {
     const total = await prisma.college.count({ where });
     const colleges = await prisma.college.findMany({
       where,
+      include: {
+        subscriptionPeriods: {
+          where: { status: 'active' },
+          orderBy: { expires_at: 'desc' },
+          take: 1
+        }
+      },
       orderBy: { createdAt: 'desc' },
       skip: skipNum,
       take: limitNum
     });
 
-    const formattedColleges = colleges.map(c => ({
-      ...c,
-      _id: c.id
-    }));
+    const formattedColleges = colleges.map(c => {
+      const activePeriod = c.subscriptionPeriods?.[0] || null;
+      const expiryDate = activePeriod?.expires_at || c.subscription?.periodEnd || null;
+      let daysLeft = null;
+      if (expiryDate) {
+        daysLeft = Math.ceil((new Date(expiryDate).getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+      }
+      return {
+        ...c,
+        _id: c.id,
+        expiryDate,
+        daysLeft,
+        subscription_status: c.subscription_status || c.subscription?.status || 'active'
+      };
+    });
 
     res.json({
       success: true,

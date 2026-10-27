@@ -9,7 +9,17 @@ const {
   downloadPlatformInvoicePDF, downloadPlatformReceiptPDF, uploadPlatformSignature
 } = require('../controllers/superAdmin.controller');
 const {
-  getSubscriptionRequests, getSubscriptionRequest, updateSubscriptionRequest
+  getSubscriptionRequests,
+  getSubscriptionRequest,
+  updateSubscriptionRequest,
+  markContacted,
+  rejectSubscriptionRequest,
+  addSubscriptionRequestNote,
+  checkSlug,
+  approveSubscriptionRequest,
+  resendCollegeInvite,
+  revokeCollegeInvite,
+  getCollegeInviteStatus
 } = require('../controllers/subscriptionRequest.controller');
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
@@ -42,9 +52,44 @@ router.post('/custom-plan/preview', previewCustomPlan);
 router.route('/custom-plan/pricing').get(getCustomPricing).put(updateCustomPricingConfig);
 router.post('/colleges/:id/custom-plan', saveCollegeCustomPlan);
 
-// Subscription Requests management
+// Subscription Requests management (Phase 1 & Phase 3)
+router.get('/slugs/check', checkSlug);
 router.route('/subscription-requests').get(getSubscriptionRequests);
 router.route('/subscription-requests/:id').get(getSubscriptionRequest).put(updateSubscriptionRequest);
+router.patch('/subscription-requests/:id/contact', markContacted);
+router.patch('/subscription-requests/:id/reject', rejectSubscriptionRequest);
+router.post('/subscription-requests/:id/notes', addSubscriptionRequestNote);
+router.post('/subscription-requests/:id/approve', approveSubscriptionRequest);
+
+// College Invite Management (Phase 3)
+router.post('/colleges/:id/invite/resend', resendCollegeInvite);
+router.post('/colleges/:id/invite/revoke', revokeCollegeInvite);
+router.get('/colleges/:id/invite', getCollegeInviteStatus);
+
+// College Subscription Management & Messaging (Phase 9)
+const {
+  getSubscription,
+  assignSubscription,
+  renewSubscription,
+  editExpiry,
+  editFeatureOverrides,
+  suspendCollege,
+  reactivateCollege,
+  sendMessage,
+  getMessages,
+  retryMessageDelivery
+} = require('../controllers/subscriptionManagement.controller');
+
+router.get('/colleges/:id/subscription', getSubscription);
+router.post('/colleges/:id/subscription/assign', assignSubscription);
+router.post('/colleges/:id/subscription/renew', renewSubscription);
+router.patch('/colleges/:id/subscription/expiry', editExpiry);
+router.patch('/colleges/:id/subscription/features', editFeatureOverrides);
+router.post('/colleges/:id/suspend', suspendCollege);
+router.post('/colleges/:id/reactivate', reactivateCollege);
+router.get('/colleges/:id/messages', getMessages);
+router.post('/colleges/:id/messages', sendMessage);
+router.post('/colleges/:id/messages/:deliveryId/retry', retryMessageDelivery);
 
 // Platform Subscription Invoices (Phase 12)
 router.route('/invoices')
