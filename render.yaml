@@ -21,7 +21,7 @@ services:
       - key: ENCRYPTION_SECRET
         generateValue: true
       - key: CLIENT_URL
-        sync: false
+        value: https://collegeshub.org
       - key: EMAIL_PROVIDER
         value: gmail
       - key: EMAIL_USER
