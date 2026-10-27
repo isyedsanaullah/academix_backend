@@ -314,6 +314,8 @@ async function cleanupExpiredTokens(req, res) {
     console.error('[CronJob] cleanupExpiredTokens error:', err.message);
     return res.status(500).json({ success: false, job: 'cleanup-expired-tokens', error: err.message });
   }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // JOB 4: Subscription Expiry Reminders & Grace/Suspension Lifecycle
 //   - Reminders at 30, 14, 7, 1 days before expiry (tracked, sent once).
