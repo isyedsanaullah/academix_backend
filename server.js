@@ -111,7 +111,8 @@ app.use(cors({
     'Accept',
     'X-Tenant-Slug',
     'X-Host-Type',
-    'X-Cron-Secret'
+    'X-Cron-Secret',
+    'X-Expected-College-Id'
   ]
 }));
 app.use(express.json());

@@ -120,6 +120,9 @@ exports.login = async (req, res, next) => {
 
       // If tenant slug is provided (subdomain), user must belong to this specific college
       if (tenantSlug) {
+        if (!user.college_id) {
+          return res.status(401).json({ success: false, message: 'Invalid credentials' });
+        }
         const userCollege = await prisma.college.findUnique({
           where: { id: user.college_id },
           select: { id: true, slug: true, code: true, status: true }
