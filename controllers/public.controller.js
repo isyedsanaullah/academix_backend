@@ -13,12 +13,16 @@ exports.getColleges = async (req, res, next) => {
         id: true,
         name: true,
         code: true,
+        slug: true,
+        tagline: true,
+        about: true,
         email: true,
         phone: true,
         address: true,
         city: true,
         website: true,
-        logo: true
+        logo: true,
+        settings: true
       },
       orderBy: { name: 'asc' }
     });
