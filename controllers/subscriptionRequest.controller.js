@@ -15,8 +15,29 @@ const {
   getCollegeInviteStatus: serviceGetInviteStatus
 } = require('../services/collegeProvisioning');
 
-const VALID_PLANS = ['free', 'basic', 'standard', 'premium', 'enterprise'];
+const VALID_PLANS = ['free', 'basic', 'standard', 'premium', 'enterprise', 'ownership', 'custom', 'professional'];
 const VALID_STATUSES = ['new', 'contacted', 'approved', 'rejected'];
+
+/**
+ * @desc    Get all active subscription plans for public display
+ * @route   GET /api/public/subscription-plans
+ * @access  Public
+ */
+exports.getSubscriptionPlans = async (req, res, next) => {
+  try {
+    const prisma = getSystemClient();
+    const plans = await prisma.subscription.findMany({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' }
+    });
+    res.json({
+      success: true,
+      data: plans
+    });
+  } catch (error) {
+    next(error);
+  }
+};
 
 /**
  * Helper to validate email format

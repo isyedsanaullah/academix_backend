@@ -8,7 +8,7 @@ const {
   resolveRoutingCode
 } = require('../controllers/public.controller');
 const { resolveCodeLimiter } = require('../middleware/rateLimit');
-const { submitSubscriptionRequest, submitContactForm } = require('../controllers/subscriptionRequest.controller');
+const { submitSubscriptionRequest, submitContactForm, getSubscriptionPlans } = require('../controllers/subscriptionRequest.controller');
 const multer = require('multer');
 const path = require('path');
 
@@ -112,6 +112,8 @@ router.post('/apply/:code', applyRateLimiter, checkOnlineAdmissions, upload.fiel
 ]), submitApplication);
 router.get('/application-status/:appNumber', checkStatus);
 router.post('/subscription-request', submitSubscriptionRequest);
+router.get('/subscription-plans', getSubscriptionPlans);
+router.get('/plans', getSubscriptionPlans);
 router.post('/contact', submitContactForm);
 
 // Invitation Acceptance Public Routes (Rate Limited)
