@@ -417,12 +417,19 @@ async function resendCollegeInvite({ collegeId, actorUser }) {
     }
   });
 
+  const setupUrl = buildSetupUrl(college.slug, rawToken);
+  const directSetupUrl = `https://${ROOT_DOMAIN}/setup/${rawToken}`;
+
   return {
-    success: true,
+    success: sendRes.success,
     message: sendRes.success
-      ? `Invitation resent to ${college.email}`
-      : `New invite generated, but email dispatch failed: ${sendRes.error}`,
-    emailStatus: sendRes.success ? 'sent' : 'failed'
+      ? `Invitation email sent successfully to ${college.email}`
+      : `Email dispatch failed: ${sendRes.error || 'Connection error'}. You can still copy the setup link below.`,
+    emailStatus: sendRes.success ? 'sent' : 'failed',
+    setupUrl,
+    directSetupUrl,
+    rawToken,
+    error: sendRes.success ? null : sendRes.error
   };
 }
 
