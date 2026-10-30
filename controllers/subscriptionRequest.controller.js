@@ -15,7 +15,7 @@ const {
   getCollegeInviteStatus: serviceGetInviteStatus
 } = require('../services/collegeProvisioning');
 
-const VALID_PLANS = ['free', 'basic', 'standard', 'premium', 'enterprise', 'ownership', 'custom', 'professional'];
+const VALID_PLANS = ['free', 'basic', 'starter', 'standard', 'premium', 'enterprise', 'ownership', 'custom', 'professional'];
 const VALID_STATUSES = ['new', 'contacted', 'approved', 'rejected'];
 
 /**
