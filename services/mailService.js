@@ -15,13 +15,36 @@ const nodemailer = require('nodemailer');
 const createTransporter = () => {
   const provider = (process.env.EMAIL_PROVIDER || 'gmail').toLowerCase();
 
-  if (provider === 'mock' || process.env.NODE_ENV === 'test' || !process.env.EMAIL_USER) {
+  if (provider === 'mock' || process.env.NODE_ENV === 'test' || (!process.env.EMAIL_USER && !process.env.RESEND_API_KEY && !process.env.EMAIL_PASS)) {
     return {
       sendMail: async () => ({ messageId: `<mock-${Date.now()}@collegeshub.org>` })
     };
   }
 
   switch (provider) {
+    case 'resend': {
+      const { Resend } = require('resend');
+      const apiKey = process.env.RESEND_API_KEY || process.env.EMAIL_PASS;
+      const resend = new Resend(apiKey);
+      return {
+        sendMail: async (opts) => {
+          const toList = Array.isArray(opts.to) ? opts.to : [opts.to];
+          const payload = {
+            from: opts.from || getFromAddress(),
+            to: toList,
+            subject: opts.subject,
+            html: opts.html || undefined,
+            text: opts.text || undefined
+          };
+          const res = await resend.emails.send(payload);
+          if (res.error) {
+            console.error('[MailService] Resend delivery error:', res.error);
+            throw new Error(res.error.message || 'Resend delivery failed');
+          }
+          return { messageId: res.data?.id };
+        }
+      };
+    }
     case 'smtp':
       return nodemailer.createTransport({
         host: process.env.EMAIL_HOST,
@@ -36,13 +59,6 @@ const createTransporter = () => {
         secure: false,
         auth: { user: 'apikey', pass: process.env.EMAIL_PASS || process.env.MAIL_API_KEY }
       });
-    case 'resend':
-      return nodemailer.createTransport({
-        host: 'smtp.resend.com',
-        port: 587,
-        secure: false,
-        auth: { user: 'resend', pass: process.env.EMAIL_PASS || process.env.MAIL_API_KEY }
-      });
     case 'ses':
       return nodemailer.createTransport({
         host: process.env.EMAIL_HOST || 'email-smtp.us-east-1.amazonaws.com',
@@ -56,6 +72,8 @@ const createTransporter = () => {
         host: 'smtp.gmail.com',
         port: 587,
         secure: false, // Use STARTTLS on port 587
+        pool: true,    // Reuse connections — avoids 10-20s reconnect delay per email
+        maxConnections: 3,
         family: 4,     // Force IPv4 to prevent ENETUNREACH errors on cloud hosts like Render
         auth: {
           user: process.env.EMAIL_USER,
@@ -64,15 +82,15 @@ const createTransporter = () => {
         tls: {
           rejectUnauthorized: false
         },
-        connectionTimeout: 20000,
-        greetingTimeout: 20000,
-        socketTimeout: 20000
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 15000
       });
   }
 };
 
 const getFromAddress = () => {
-  const mailFrom = process.env.MAIL_FROM || process.env.EMAIL_USER || 'no-reply@collegeshub.org';
+  const mailFrom = process.env.EMAIL_FROM || process.env.MAIL_FROM || (process.env.EMAIL_USER && process.env.EMAIL_USER.includes('@') ? process.env.EMAIL_USER : 'noreply@collegeshub.org');
   const fromName = process.env.EMAIL_FROM_NAME || 'Collegeshub';
   return `"${fromName}" <${mailFrom}>`;
 };

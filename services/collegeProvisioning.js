@@ -316,33 +316,31 @@ async function approveAndProvisionCollege({
     };
   }
 
-  // After transaction commits: send the invite email asynchronously
-  try {
-    const sendRes = await sendInviteEmail({
+  // After transaction commits: fire invite email in background (non-blocking)
+  const inviteId = provisionedData.invite.id;
+  setImmediate(() => {
+    sendInviteEmail({
       toEmail: provisionedData.college.email,
       collegeName: provisionedData.college.name,
       slug: cleanSlug,
       token: provisionedData.rawToken,
       expiresAt: inviteExpiry
+    }).then(sendRes => {
+      return prisma.collegeInvite.update({
+        where: { id: inviteId },
+        data: {
+          email_status: sendRes.success ? 'sent' : 'failed',
+          email_error: sendRes.success ? null : (sendRes.error || 'Failed to dispatch email')
+        }
+      });
+    }).catch(emailErr => {
+      console.error('[CollegeProvisioning] Background email dispatch failed:', emailErr.message);
+      prisma.collegeInvite.update({
+        where: { id: inviteId },
+        data: { email_status: 'failed', email_error: emailErr.message }
+      }).catch(() => {});
     });
-
-    await prisma.collegeInvite.update({
-      where: { id: provisionedData.invite.id },
-      data: {
-        email_status: sendRes.success ? 'sent' : 'failed',
-        email_error: sendRes.success ? null : (sendRes.error || 'Failed to dispatch email')
-      }
-    });
-  } catch (emailErr) {
-    console.error('[CollegeProvisioning] Post-commit email dispatch failed:', emailErr.message);
-    await prisma.collegeInvite.update({
-      where: { id: provisionedData.invite.id },
-      data: {
-        email_status: 'failed',
-        email_error: emailErr.message
-      }
-    }).catch(() => {});
-  }
+  });
 
   return {
     success: true,
@@ -400,36 +398,43 @@ async function resendCollegeInvite({ collegeId, actorUser }) {
     });
   });
 
-  // Send email
-  const sendRes = await sendInviteEmail({
-    toEmail: college.email,
-    collegeName: college.name,
-    slug: college.slug,
-    token: rawToken,
-    expiresAt: inviteExpiry
-  });
-
-  await prisma.collegeInvite.update({
-    where: { id: invite.id },
-    data: {
-      email_status: sendRes.success ? 'sent' : 'failed',
-      email_error: sendRes.success ? null : (sendRes.error || 'Failed to dispatch email')
-    }
-  });
-
   const setupUrl = buildSetupUrl(college.slug, rawToken);
   const directSetupUrl = `https://${ROOT_DOMAIN}/setup/${rawToken}`;
+  const inviteId = invite.id;
+
+  // Fire email in background — respond immediately without blocking on SMTP
+  setImmediate(() => {
+    sendInviteEmail({
+      toEmail: college.email,
+      collegeName: college.name,
+      slug: college.slug,
+      token: rawToken,
+      expiresAt: inviteExpiry
+    }).then(sendRes => {
+      return prisma.collegeInvite.update({
+        where: { id: inviteId },
+        data: {
+          email_status: sendRes.success ? 'sent' : 'failed',
+          email_error: sendRes.success ? null : (sendRes.error || 'Failed to dispatch email')
+        }
+      });
+    }).catch(emailErr => {
+      console.error('[CollegeProvisioning] Background resend failed:', emailErr.message);
+      prisma.collegeInvite.update({
+        where: { id: inviteId },
+        data: { email_status: 'failed', email_error: emailErr.message }
+      }).catch(() => {});
+    });
+  });
 
   return {
-    success: sendRes.success,
-    message: sendRes.success
-      ? `Invitation email sent successfully to ${college.email}`
-      : `Email dispatch failed: ${sendRes.error || 'Connection error'}. You can still copy the setup link below.`,
-    emailStatus: sendRes.success ? 'sent' : 'failed',
+    success: true,
+    message: `Invitation email queued for ${college.email}. The setup link is ready below.`,
+    emailStatus: 'queued',
     setupUrl,
     directSetupUrl,
     rawToken,
-    error: sendRes.success ? null : sendRes.error
+    error: null
   };
 }
 

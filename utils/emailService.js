@@ -63,14 +63,30 @@ const createTransporter = () => {
         auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS }
       });
 
-    // Resend (via SMTP relay)
-    case 'resend':
-      return nodemailer.createTransport({
-        host: 'smtp.resend.com',
-        port: 587,
-        secure: false,
-        auth: { user: 'resend', pass: process.env.EMAIL_PASS }
-      });
+    // Resend (via official SDK HTTP API)
+    case 'resend': {
+      const { Resend } = require('resend');
+      const apiKey = process.env.RESEND_API_KEY || process.env.EMAIL_PASS;
+      const resend = new Resend(apiKey);
+      return {
+        sendMail: async (opts) => {
+          const toList = Array.isArray(opts.to) ? opts.to : [opts.to];
+          const payload = {
+            from: opts.from || fromAddress(),
+            to: toList,
+            subject: opts.subject,
+            html: opts.html || undefined,
+            text: opts.text || undefined
+          };
+          const res = await resend.emails.send(payload);
+          if (res.error) {
+            console.error('[EmailService] Resend delivery error:', res.error);
+            throw new Error(res.error.message || 'Resend delivery failed');
+          }
+          return { messageId: res.data?.id };
+        }
+      };
+    }
 
     // Gmail (default — requires an App Password, not the account password)
     case 'gmail':
@@ -79,6 +95,8 @@ const createTransporter = () => {
         host: 'smtp.gmail.com',
         port: 587,
         secure: false, // Use STARTTLS on port 587
+        pool: true,    // Reuse connections — avoids 10-20s reconnect delay per email
+        maxConnections: 3,
         family: 4,     // Force IPv4 to prevent ENETUNREACH errors on cloud hosts like Render
         auth: {
           user: process.env.EMAIL_USER,
@@ -87,17 +105,18 @@ const createTransporter = () => {
         tls: {
           rejectUnauthorized: false
         },
-        connectionTimeout: 20000,
-        greetingTimeout: 20000,
-        socketTimeout: 20000
+        connectionTimeout: 15000,
+        greetingTimeout: 15000,
+        socketTimeout: 15000
       });
   }
 };
 
 // ── Shared sender address ──────────────────────────────────────────────
 const fromAddress = () => {
-  const name = process.env.EMAIL_FROM_NAME || 'Academix';
-  return `"${name}" <${process.env.EMAIL_USER}>`;
+  const name = process.env.EMAIL_FROM_NAME || 'Collegeshub';
+  const email = process.env.EMAIL_FROM || process.env.MAIL_FROM || (process.env.EMAIL_USER && process.env.EMAIL_USER.includes('@') ? process.env.EMAIL_USER : 'noreply@collegeshub.org');
+  return `"${name}" <${email}>`;
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────

@@ -115,21 +115,7 @@ exports.submitSubscriptionRequest = async (req, res, next) => {
       }
     });
 
-    // 4. Send Email Notification
-    try {
-      await sendSubscriptionRequestEmail('syyedsanaullah@gmail.com', {
-        collegeName: request.collegeName,
-        adminEmail: request.adminEmail,
-        phone: request.phone,
-        selectedPlan: request.selectedPlan,
-        studentCount: request.studentCount,
-        message: request.message,
-        timestamp: request.createdAt
-      });
-    } catch (emailErr) {
-      console.error('Subscription request saved but email notification failed:', emailErr.message);
-    }
-
+    // 4. Respond immediately — don't block on email delivery
     res.status(201).json({
       success: true,
       message: 'Subscription request submitted successfully! We will contact you soon.',
@@ -140,6 +126,20 @@ exports.submitSubscriptionRequest = async (req, res, next) => {
         status: request.status
       }
     });
+
+    // 5. Send Email Notification in background (non-blocking)
+    sendSubscriptionRequestEmail('syyedsanaullah@gmail.com', {
+      collegeName: request.collegeName,
+      adminEmail: request.adminEmail,
+      phone: request.phone,
+      selectedPlan: request.selectedPlan,
+      studentCount: request.studentCount,
+      message: request.message,
+      timestamp: request.createdAt
+    }).catch(emailErr => {
+      console.error('[SubscriptionRequest] Background email notification failed:', emailErr.message);
+    });
+
   } catch (error) {
     next(error);
   }
