@@ -10,6 +10,45 @@ const mailService = require('./mailService');
 const { logActivity } = require('./activityLog.service');
 
 /**
+ * Auto-creates a Hostinger subdomain via their REST API.
+ * Runs fire-and-forget; failure is logged but never blocks provisioning.
+ */
+async function createHostingerSubdomain(slug) {
+  const token    = process.env.HOSTINGER_API_TOKEN;
+  const username = process.env.HOSTINGER_USERNAME;
+  const domain   = process.env.HOSTINGER_DOMAIN || ROOT_DOMAIN;
+
+  if (!token || !username) {
+    console.warn('[Hostinger] HOSTINGER_API_TOKEN or HOSTINGER_USERNAME not set — skipping subdomain creation');
+    return;
+  }
+
+  try {
+    const res = await fetch(
+      `https://api.hostinger.com/v1/hosting/${username}/domains/${domain}/subdomains`,
+      {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({ subdomain: slug, is_using_public_directory: true })
+      }
+    );
+    const body = await res.json().catch(() => ({}));
+    if (res.ok) {
+      console.log(`[Hostinger] ✅ Subdomain created: ${slug}.${domain}`);
+    } else {
+      console.warn(`[Hostinger] ⚠️ Subdomain creation responded ${res.status}:`, body.message || JSON.stringify(body));
+    }
+  } catch (err) {
+    console.error('[Hostinger] ❌ Subdomain creation failed:', err.message);
+  }
+}
+
+
+/**
  * Check subdomain slug availability.
  * @param {string} rawSlug
  * @returns {Promise<{ available: boolean, reason?: string, slug?: string }>}
@@ -353,6 +392,11 @@ async function approveAndProvisionCollege({
         data: { email_status: 'failed', email_error: emailErr.message }
       }).catch(() => {});
     });
+
+    // Auto-create Hostinger subdomain (non-blocking)
+    createHostingerSubdomain(cleanSlug).catch(err =>
+      console.error('[CollegeProvisioning] Hostinger subdomain background error:', err.message)
+    );
   });
 
   return {
