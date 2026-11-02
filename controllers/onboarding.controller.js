@@ -1039,42 +1039,49 @@ exports.launchCollegeWorkspace = async (req, res, next) => {
     const tenantUrl = isDev ? `http://${slug}.localhost:3000` : `https://${slug}.${rootDomain}`;
     const adminUrl = `${tenantUrl}/admin`;
 
-    const welcomeHtml = `
-      <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1e293b; background: #ffffff;">
-        <div style="margin-bottom: 24px; text-align: center;">
-          <h2 style="color: #0A4D94; margin: 0;">Colleges<span style="color: #299A49;">hub</span><span style="color: #299A49; font-size: 14px;">.org</span></h2>
-          <p style="color: #64748b; font-size: 13px; margin: 4px 0 0 0;">Campus Management Platform</p>
-        </div>
-        <div style="border: 1px solid #e2e8f0; border-radius: 12px; padding: 28px; background: #f8fafc;">
-          <h2 style="color: #0f172a; margin-top: 0; font-size: 20px;">🎉 Congratulations, ${college.name}!</h2>
-          <p style="color: #475569; font-size: 14px; line-height: 1.6;">
-            Your college workspace on Collegeshub has been officially launched and is now <strong>active</strong>!
-          </p>
-          <div style="margin: 20px 0; padding: 16px; background: #ffffff; border: 1px solid #e2e8f0; border-radius: 8px;">
-            <p style="margin: 0 0 8px 0; font-size: 13px; color: #64748b;"><strong>What's now live:</strong></p>
-            <ul style="margin: 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
-              <li>Your public college portal is live at <a href="${tenantUrl}" style="color: #0A4D94; font-weight: bold;">${tenantUrl}</a></li>
-              <li>Teachers, staff members, and students can now log in securely.</li>
-              <li>Your administrative management tools are fully operational.</li>
+    const { buildCollegeshubTemplate, toPlainText } = require('../services/mailService');
+
+    const welcomeBodyHtml = `
+      <p style="margin:0 0 14px;color:#334155;font-size:15px;">
+        Your college workspace on <strong style="color:#0F172A;">CollegesHub</strong> has been officially
+        launched and is now <strong style="color:#289A49;">active</strong>! 🎉
+      </p>
+      <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px;">
+        <tr>
+          <td style="background:#F0FDF4;border:1px solid #BBF7D0;border-radius:10px;padding:16px 20px;">
+            <p style="margin:0 0 8px;color:#14532D;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:1px;">What's now live</p>
+            <ul style="margin:0;padding-left:18px;color:#166534;font-size:13px;line-height:1.7;">
+              <li>Your public college portal: <a href="${tenantUrl}" style="color:#0A4D94;font-weight:700;">${tenantUrl}</a></li>
+              <li>Teachers, staff, and students can now log in securely</li>
+              <li>All administrative management tools are fully operational</li>
             </ul>
-          </div>
-          <div style="text-align: center; margin: 28px 0;">
-            <a href="${adminUrl}" style="background-color: #0A4D94; color: #ffffff; padding: 12px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 14px; display: inline-block;">
-              Access Admin Dashboard
-            </a>
-          </div>
-          <p style="color: #94a3b8; font-size: 12px; line-height: 1.5; margin-bottom: 0;">
-            Need assistance or have questions? Our support team is always here to help at <a href="mailto:support@collegeshub.org" style="color: #0A4D94;">support@collegeshub.org</a>.
-          </p>
-        </div>
-      </div>
+          </td>
+        </tr>
+      </table>
+      <p style="margin:0;color:#64748B;font-size:13px;">
+        Need help? Contact us at
+        <a href="mailto:support@collegeshub.org" style="color:#0A4D94;">support@collegeshub.org</a>
+      </p>
     `;
+
+    const welcomeHtml = buildCollegeshubTemplate({
+      title: `🎉 Congratulations, ${college.name}!`,
+      preheader: `${college.name} is now live on CollegesHub`,
+      bodyHtml: welcomeBodyHtml,
+      buttonText: 'Access Admin Dashboard →',
+      buttonUrl: adminUrl
+    });
 
     await sendMail({
       to: req.user.email,
-      subject: `🎉 Congratulations! ${college.name} is now live on Collegeshub`,
+      subject: `🎉 Congratulations! ${college.name} is now live on CollegesHub`,
       html: welcomeHtml,
-      text: `Congratulations! ${college.name} is now live on Collegeshub. Access your administrative dashboard at: ${adminUrl}`
+      text: toPlainText({
+        title: `Congratulations, ${college.name}!`,
+        bodyText: `Your college workspace is now live.\nPortal: ${tenantUrl}\nAdmin dashboard: ${adminUrl}`,
+        buttonText: 'Access Admin Dashboard',
+        buttonUrl: adminUrl
+      })
     }).catch(e => console.error('Welcome email dispatch notice:', e.message));
 
     res.json({

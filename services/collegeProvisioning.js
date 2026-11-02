@@ -77,15 +77,28 @@ async function sendInviteEmail({ toEmail, collegeName, slug, token, expiresAt })
   const subject = `Welcome to Collegeshub — Set up your ${collegeName} workspace`;
 
   const bodyHtml = `
-    <p>Dear Administrator,</p>
-    <p>We are delighted to inform you that your subscription request for <strong>${collegeName}</strong> has been approved!</p>
-    <p>Your dedicated campus subdomain is configured and ready: <strong style="color:#0A4D94;">${slug}.${ROOT_DOMAIN}</strong></p>
-    <p>Please click the button below to complete your administrator account setup and begin customizing your portal:</p>
-    <div style="background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:10px;padding:14px 18px;margin:24px 0;">
-      <p style="margin:0;font-size:12px;color:#94a3b8;">
-        ⏳ <strong>Security Notice:</strong> This single-use setup link will expire on <strong>${formattedExpiry}</strong> (7 days from issue).
-      </p>
-    </div>
+    <p style="margin:0 0 12px;color:#334155;">Dear Administrator,</p>
+    <p style="margin:0 0 12px;color:#334155;">
+      We are delighted to inform you that your subscription request for
+      <strong style="color:#0F172A;">${collegeName}</strong> has been approved!
+    </p>
+    <p style="margin:0 0 12px;color:#334155;">
+      Your dedicated campus subdomain is configured and ready:
+      <strong style="color:#0A4D94;">${slug}.${ROOT_DOMAIN}</strong>
+    </p>
+    <p style="margin:0 0 20px;color:#334155;">
+      Click the button below to complete your setup and begin customizing your portal:
+    </p>
+    <table cellpadding="0" cellspacing="0" width="100%" style="margin-bottom:20px;">
+      <tr>
+        <td style="background:#FEF9EC;border:1px solid #FCD34D;border-radius:10px;padding:12px 16px;">
+          <span style="font-size:15px;">&#x23F3;</span>
+          <span style="color:#92400E;font-size:13px;font-weight:600;margin-left:8px;">
+            This setup link expires on <strong>${formattedExpiry}</strong> (7 days from issue).
+          </span>
+        </td>
+      </tr>
+    </table>
   `;
 
   const html = mailService.buildCollegeshubTemplate({
