@@ -1,8 +1,8 @@
 'use strict';
 
 const { getSystemClient } = require('../config/prismaManager');
-const { sendSubscriptionRequestEmail, sendContactDeveloperEmail } = require('../utils/emailService');
 const mailService = require('../services/mailService');
+const { sendSubscriptionRequestEmail, sendContactDeveloperEmail } = mailService;
 const {
   transitionRequestStatus,
   addRequestNote

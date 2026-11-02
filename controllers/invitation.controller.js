@@ -2,7 +2,7 @@ const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { getSystemClient } = require('../config/prismaManager');
-const { sendInvitationEmail } = require('../utils/emailService');
+const { sendInvitationEmail } = require('../services/mailService');
 
 // Helper to create audit log
 const createAuditLog = async (prisma, { userId, collegeId, action, details, req }) => {

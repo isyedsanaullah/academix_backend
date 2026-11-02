@@ -1,7 +1,7 @@
 // ─── Profile Controller (Multi-DB with Prisma) ───────────────────
 const bcrypt = require('bcryptjs');
 const { getSystemClient } = require('../config/prismaManager');
-const { generateCode, sendVerificationEmail, sendPasswordResetEmail } = require('../utils/emailService');
+const { generateCode, sendVerificationEmail, sendPasswordResetEmail } = require('../services/mailService');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
 const { getEntitlements } = require('../middleware/loadEntitlements');
 const { resolveFileUrl } = require('../services/fileResolver');
