@@ -30,7 +30,8 @@ const {
   getStudentTemplate,
   importStudents,
   downloadBatchErrors,
-  getRecentBatches
+  getRecentBatches,
+  getBatchStatus
 } = require('../controllers/studentImport.controller');
 
 const memoryUpload = multer({
@@ -54,6 +55,7 @@ router.post('/staff/:userId/resend', requireVerifiedEmail, resendStaffInvite);
 // ── Phase 6 Student Bulk Import (Requires Verified Email) ──
 router.get('/students/template', getStudentTemplate);
 router.post('/students/import', requireVerifiedEmail, importStudents);
+router.get('/students/batches/:id/status', getBatchStatus);
 router.get('/students/batches/:id/errors', downloadBatchErrors);
 router.get('/students/batches', getRecentBatches);
 
