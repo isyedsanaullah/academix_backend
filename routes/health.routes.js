@@ -15,6 +15,7 @@ router.get('/', async (req, res) => {
   };
 
   let overallHealthy = true;
+  const version = 'v2.1-files-fix';
 
   // 1. Database & pgvector Check
   try {
@@ -81,6 +82,7 @@ router.get('/', async (req, res) => {
   };
 
   res.status(overallHealthy ? 200 : 503).json({
+    version,
     status: overallHealthy ? 'healthy' : 'degraded',
     timestamp: new Date().toISOString(),
     latencyMs: Date.now() - startTime,

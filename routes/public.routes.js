@@ -103,6 +103,38 @@ const checkOnlineAdmissions = async (req, res, next) => {
 router.get('/colleges', getColleges);
 router.get('/college/:code', getCollegePage);
 router.get('/tenant/:slug', getTenantPublicProfile);
+
+// Public endpoint for serving files by object key (logos, covers, avatars, public assets)
+router.get('/files/download-key', async (req, res, next) => {
+  try {
+    const objectKey = req.query.key;
+    if (!objectKey || typeof objectKey !== 'string') {
+      return res.status(400).json({ success: false, message: 'Missing key parameter' });
+    }
+    if (objectKey.includes('..') || objectKey.startsWith('/')) {
+      return res.status(400).json({ success: false, message: 'Invalid key parameter' });
+    }
+
+    const { getObjectStream, headObject } = require('../services/storageService');
+    const meta = await headObject(objectKey);
+    if (!meta) {
+      return res.status(404).json({ success: false, message: 'File not found' });
+    }
+
+    res.set({
+      'Content-Type': meta.contentType || 'application/octet-stream',
+      'Content-Length': meta.contentLength,
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'ETag': meta.etag,
+      'Access-Control-Allow-Origin': '*'
+    });
+
+    const streamObj = await getObjectStream(objectKey);
+    streamObj.body.pipe(res);
+  } catch (err) {
+    next(err);
+  }
+});
 router.post('/resolve-code', resolveCodeLimiter, resolveRoutingCode);
 router.post('/apply/:code', applyRateLimiter, checkOnlineAdmissions, upload.fields([
   { name: 'photo', maxCount: 1 },
