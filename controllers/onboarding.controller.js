@@ -7,6 +7,7 @@ const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
 const { uploadObject, generateObjectKey, validateFileSignature } = require('../services/storageService');
 const { send: sendMail } = require('../services/mailService');
+const { getCollegeLimit } = require('../services/quota');
 
 // ─── Helper for audit logs ──────────────────────────────────────────────────
 const createAuditLog = async (prisma, { userId, collegeId, action, details, req }) => {
@@ -108,6 +109,25 @@ async function computeRealOnboardingState(prisma, tenantDb, college, user) {
     updatedAt: new Date().toISOString()
   };
 
+  const [maxStudentsLimit, maxStaffLimit] = await Promise.all([
+    getCollegeLimit(prisma, college, 'students').catch(() => null),
+    getCollegeLimit(prisma, college, 'staff').catch(() => null)
+  ]);
+
+  const studentQuota = {
+    limit: maxStudentsLimit,
+    used: studentCount,
+    remaining: maxStudentsLimit !== null ? Math.max(0, maxStudentsLimit - studentCount) : null,
+    isUnlimited: maxStudentsLimit === null || maxStudentsLimit < 0
+  };
+
+  const staffQuota = {
+    limit: maxStaffLimit,
+    used: staffCount,
+    remaining: maxStaffLimit !== null ? Math.max(0, maxStaffLimit - staffCount) : null,
+    isUnlimited: maxStaffLimit === null || maxStaffLimit < 0
+  };
+
   return {
     state: updatedState,
     academicSummary: {
@@ -115,7 +135,13 @@ async function computeRealOnboardingState(prisma, tenantDb, college, user) {
       classCount,
       classes: activeClasses || [],
       staffCount,
-      studentCount
+      studentCount,
+      studentQuota,
+      staffQuota
+    },
+    quotas: {
+      students: studentQuota,
+      staff: staffQuota
     }
   };
 }
@@ -139,7 +165,7 @@ exports.getOnboardingState = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'College not found' });
     }
 
-    const { state, academicSummary } = await computeRealOnboardingState(
+    const { state, academicSummary, quotas } = await computeRealOnboardingState(
       prisma,
       tenantDb,
       college,
@@ -190,7 +216,8 @@ exports.getOnboardingState = async (req, res, next) => {
         currentStep: state.currentStep,
         steps: state.steps,
         completionPercent: state.completionPercent,
-        academicSummary
+        academicSummary,
+        quotas
       }
     });
   } catch (error) {

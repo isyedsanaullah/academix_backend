@@ -21,7 +21,7 @@ async function getCollegeLimit(db, collegeOrId, metric) {
       try {
         college = await db.college?.findUnique({
           where: { id: collegeOrId },
-          select: { subscription: true }
+          select: { subscription: true, settings: true, feature_overrides: true }
         });
       } catch (_) {}
 
@@ -42,6 +42,8 @@ async function getCollegeLimit(db, collegeOrId, metric) {
     if (!college) return null;
 
     const subJson = (college.subscription && typeof college.subscription === 'object') ? college.subscription : {};
+    const settingsJson = (college.settings && typeof college.settings === 'object') ? college.settings : {};
+    const featureOverrides = (college.feature_overrides && typeof college.feature_overrides === 'object') ? college.feature_overrides : {};
     const plan = normalizePlan(subJson.plan);
 
     // Look up system plan definition
@@ -56,12 +58,39 @@ async function getCollegeLimit(db, collegeOrId, metric) {
 
     const planLimits = (planRow?.limits && typeof planRow.limits === 'object') ? planRow.limits : {};
     const collegeLimits = (subJson.limits && typeof subJson.limits === 'object') ? subJson.limits : {};
-    const limits = { ...planLimits, ...collegeLimits };
+    const settingsLimits = (settingsJson.limits && typeof settingsJson.limits === 'object') ? settingsJson.limits : {};
+    const limits = { ...planLimits, ...collegeLimits, ...settingsLimits };
+
+    // Explicit overrides in settings or feature_overrides take highest priority
+    if (settingsJson.maxStudents !== undefined && settingsJson.maxStudents !== null) {
+      limits.maxStudents = settingsJson.maxStudents;
+    }
+    if (settingsJson.studentLimit !== undefined && settingsJson.studentLimit !== null) {
+      limits.maxStudents = settingsJson.studentLimit;
+    }
+    if (settingsJson.maxStaff !== undefined && settingsJson.maxStaff !== null) {
+      limits.maxStaff = settingsJson.maxStaff;
+    }
+    if (settingsJson.staffLimit !== undefined && settingsJson.staffLimit !== null) {
+      limits.maxStaff = settingsJson.staffLimit;
+    }
+    if (featureOverrides.maxStudents !== undefined && featureOverrides.maxStudents !== null) {
+      limits.maxStudents = featureOverrides.maxStudents;
+    }
+    if (featureOverrides.maxStaff !== undefined && featureOverrides.maxStaff !== null) {
+      limits.maxStaff = featureOverrides.maxStaff;
+    }
 
     if (metric === 'students') {
       const maxStudents = limits.maxStudents;
       if (maxStudents === undefined || maxStudents === null || Number(maxStudents) < 0) return null;
       return Number(maxStudents);
+    }
+
+    if (metric === 'staff') {
+      const maxStaff = limits.maxStaff;
+      if (maxStaff === undefined || maxStaff === null || Number(maxStaff) < 0) return null;
+      return Number(maxStaff);
     }
 
     if (metric === 'storageBytes') {

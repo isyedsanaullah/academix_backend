@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const { getSystemClient } = require('../config/prismaManager');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
+const { getCollegeLimit, consume } = require('../services/quota');
 
 // ── GET /admin/onboarding/students/template ─────────────────────────────────
 exports.getStudentTemplate = async (req, res, next) => {
@@ -168,11 +169,28 @@ exports.importStudents = async (req, res, next) => {
       });
     }
 
-    // 2. Fetch existing classes and sections for mapping
-    const [existingClasses, existingSections] = await Promise.all([
+    // 2. Fetch existing classes and sections for mapping, and evaluate student quota
+    const [existingClasses, existingSections, studentLimit, initialStudentCount] = await Promise.all([
       tenantDb.class.findMany({ where: { college_id: collegeId } }),
-      tenantDb.section.findMany({ where: { college_id: collegeId, session_id: currentSession.id } })
+      tenantDb.section.findMany({ where: { college_id: collegeId, session_id: currentSession.id } }),
+      getCollegeLimit(prisma, collegeId, 'students'),
+      tenantDb.student.count({ where: { college_id: collegeId } })
     ]);
+
+    // Check if college is already at full capacity
+    if (studentLimit !== null && studentLimit >= 0 && initialStudentCount >= studentLimit) {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        message: `Student quota limit reached. Your college is currently at capacity (${initialStudentCount}/${studentLimit} students). Please upgrade your subscription plan or adjust your quota to enroll more students.`,
+        quota: {
+          limit: studentLimit,
+          used: initialStudentCount,
+          remaining: 0,
+          isUnlimited: false
+        }
+      });
+    }
 
     const classMap = new Map();
     existingClasses.forEach(c => {
@@ -299,6 +317,17 @@ exports.importStudents = async (req, res, next) => {
         s.class_id === matchedClass.id && (s.code === sectionCode || s.code.endsWith(`-${sectionCode}`))
       );
 
+      // Validation 4: Quota limit enforcement
+      if (studentLimit !== null && studentLimit >= 0 && (initialStudentCount + createdCount) >= studentLimit) {
+        failedCount++;
+        const msg = `Student quota limit reached (${studentLimit} students max). College capacity is full.`;
+        rowResults.push({ row_no: rowNo, name, rollNumber, status: 'failed', message: msg });
+        await prisma.importBatchRow.create({
+          data: { batch_id: batch.id, row_no: rowNo, row_hash: rowHash, status: 'failed', message: msg, data: row }
+        }).catch(() => {});
+        continue;
+      }
+
       // Create Student
       try {
         await tenantDb.student.create({
@@ -324,6 +353,7 @@ exports.importStudents = async (req, res, next) => {
         });
 
         createdCount++;
+        consume(prisma, collegeId, 'students', 1, studentLimit).catch(() => {});
         rowResults.push({ row_no: rowNo, name, rollNumber, status: 'created', message: 'Successfully imported' });
         await prisma.importBatchRow.create({
           data: { batch_id: batch.id, row_no: rowNo, row_hash: rowHash, status: 'created', message: 'Imported', data: row }
@@ -380,6 +410,14 @@ exports.importStudents = async (req, res, next) => {
       description: `Bulk imported students: ${createdCount} created, ${skippedCount} skipped, ${failedCount} failed from ${filename}.`
     }).catch(e => console.error('Activity log error:', e.message));
 
+    const finalCount = initialStudentCount + createdCount;
+    const quotaInfo = {
+      limit: studentLimit,
+      used: finalCount,
+      remaining: studentLimit !== null ? Math.max(0, studentLimit - finalCount) : null,
+      isUnlimited: studentLimit === null || studentLimit < 0
+    };
+
     res.json({
       success: true,
       message: `Import completed: ${createdCount} created, ${skippedCount} skipped, ${failedCount} failed.`,
@@ -388,7 +426,8 @@ exports.importStudents = async (req, res, next) => {
         total: students.length,
         created: createdCount,
         skipped: skippedCount,
-        failed: failedCount
+        failed: failedCount,
+        quota: quotaInfo
       },
       data: {
         batchId: batch.id,
@@ -396,6 +435,7 @@ exports.importStudents = async (req, res, next) => {
         created: createdCount,
         skipped: skippedCount,
         failed: failedCount,
+        quota: quotaInfo,
         rows: rowResults
       }
     });

@@ -7,6 +7,7 @@ const { generateToken, hashToken } = require('../utils/token');
 const { send: sendMail } = require('../services/mailService');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
+const { getCollegeLimit, consume } = require('../services/quota');
 
 const ALLOWED_STAFF_ROLES = ['principal', 'registrar', 'accountant', 'teacher', 'employee'];
 
@@ -16,24 +17,27 @@ exports.getStaffList = async (req, res, next) => {
     const prisma = getSystemClient();
     const collegeId = req.collegeId;
 
-    const staffMembers = await prisma.user.findMany({
-      where: {
-        college_id: collegeId,
-        role: { in: ALLOWED_STAFF_ROLES }
-      },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        phone: true,
-        emailVerified: true,
-        resetCode: true,
-        resetCodeExpires: true,
-        createdAt: true
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    const [staffMembers, staffLimit] = await Promise.all([
+      prisma.user.findMany({
+        where: {
+          college_id: collegeId,
+          role: { in: ALLOWED_STAFF_ROLES }
+        },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          phone: true,
+          emailVerified: true,
+          resetCode: true,
+          resetCodeExpires: true,
+          createdAt: true
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      getCollegeLimit(prisma, collegeId, 'staff')
+    ]);
 
     const formatted = staffMembers.map(u => ({
       id: u.id,
@@ -48,7 +52,14 @@ exports.getStaffList = async (req, res, next) => {
       createdAt: u.createdAt
     }));
 
-    res.json({ success: true, data: formatted });
+    const quota = {
+      limit: staffLimit,
+      used: staffMembers.length,
+      remaining: staffLimit !== null ? Math.max(0, staffLimit - staffMembers.length) : null,
+      isUnlimited: staffLimit === null || staffLimit < 0
+    };
+
+    res.json({ success: true, data: formatted, quota });
   } catch (error) {
     next(error);
   }
@@ -67,6 +78,28 @@ exports.createStaff = async (req, res, next) => {
     });
     if (!college) {
       return res.status(404).json({ success: false, message: 'College workspace not found.' });
+    }
+
+    // Quota evaluation for staff
+    const [staffLimit, initialStaffCount] = await Promise.all([
+      getCollegeLimit(prisma, collegeId, 'staff'),
+      prisma.user.count({
+        where: { college_id: collegeId, role: { in: ALLOWED_STAFF_ROLES } }
+      })
+    ]);
+
+    if (staffLimit !== null && staffLimit >= 0 && initialStaffCount >= staffLimit) {
+      return res.status(403).json({
+        success: false,
+        code: 'QUOTA_EXCEEDED',
+        message: `Staff quota limit reached. Your college is at maximum staff capacity (${initialStaffCount}/${staffLimit} staff accounts). Please upgrade your subscription plan or adjust your quota to invite more staff.`,
+        quota: {
+          limit: staffLimit,
+          used: initialStaffCount,
+          remaining: 0,
+          isUnlimited: false
+        }
+      });
     }
 
     // Accepts either a single staff object in body or { staffList: [...] }
@@ -114,6 +147,16 @@ exports.createStaff = async (req, res, next) => {
         continue;
       }
 
+      // Quota check per staff member
+      if (staffLimit !== null && staffLimit >= 0 && (initialStaffCount + results.created.length) >= staffLimit) {
+        results.failed.push({
+          email,
+          name,
+          reason: `Staff quota limit reached (${staffLimit} staff max). College staff capacity is full.`
+        });
+        continue;
+      }
+
       // Generate 32-byte single-use token with 3-day expiry
       const { token: rawToken, hash: tokenHash } = generateToken(32);
       const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
@@ -135,6 +178,8 @@ exports.createStaff = async (req, res, next) => {
           resetCodeExpires: expiresAt
         }
       });
+
+      consume(prisma, collegeId, 'staff', 1, staffLimit).catch(() => {});
 
       // Role profile creation (Teacher or Employee)
       if (role === 'teacher' && tenantDb.teacher) {
@@ -238,6 +283,14 @@ exports.createStaff = async (req, res, next) => {
       description: `Created ${results.created.length} staff accounts (${results.skipped.length} skipped, ${results.failed.length} failed).`
     }).catch(e => console.error('Activity log error:', e.message));
 
+    const finalStaffCount = initialStaffCount + results.created.length;
+    const quotaInfo = {
+      limit: staffLimit,
+      used: finalStaffCount,
+      remaining: staffLimit !== null ? Math.max(0, staffLimit - finalStaffCount) : null,
+      isUnlimited: staffLimit === null || staffLimit < 0
+    };
+
     res.json({
       success: true,
       message: `Staff processing finished: ${results.created.length} created, ${results.skipped.length} skipped.`,
@@ -245,8 +298,10 @@ exports.createStaff = async (req, res, next) => {
         total: incomingList.length,
         created: results.created.length,
         skipped: results.skipped.length,
-        failed: results.failed.length
+        failed: results.failed.length,
+        quota: quotaInfo
       },
+      quota: quotaInfo,
       data: {
         ...results,
         onboarding_state: updatedState
