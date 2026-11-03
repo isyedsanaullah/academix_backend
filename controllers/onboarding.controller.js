@@ -680,7 +680,8 @@ exports.uploadOnboardingMedia = async (req, res, next) => {
       cacheControl: 'public, max-age=31536000, immutable'
     });
 
-    const publicUrl = `/api/files/download-key?key=${encodeURIComponent(objectKey)}`;
+    const baseHost = process.env.BACKEND_PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : 'https://academix-backend-8zcg.onrender.com');
+    const publicUrl = `${baseHost.replace(/\/+$/, '')}/api/files/download-key?key=${encodeURIComponent(objectKey)}`;
 
     res.json({
       success: true,

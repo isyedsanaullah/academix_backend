@@ -4,6 +4,18 @@ const { getSystemClient, getTenantClient } = require('../config/prismaManager');
 const { verifyFirebaseToken } = require('../config/firebaseAdmin');
 const { consume, getCollegeLimit } = require('../services/quota');
 
+const resolvePublicFileUrl = (url, req) => {
+  if (!url || typeof url !== 'string') return url;
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('data:')) {
+    return url;
+  }
+  if (url.startsWith('/api/')) {
+    const base = process.env.BACKEND_PUBLIC_URL || (req ? `${req.protocol}://${req.get('host')}` : 'https://academix-backend-8zcg.onrender.com');
+    return `${base.replace(/\/+$/, '')}${url}`;
+  }
+  return url;
+};
+
 exports.getColleges = async (req, res, next) => {
   try {
     const systemDb = getSystemClient();
@@ -29,10 +41,19 @@ exports.getColleges = async (req, res, next) => {
 
     res.json({
       success: true,
-      data: colleges.map(c => ({
-        ...c,
-        _id: c.id
-      }))
+      data: colleges.map(c => {
+        const resolvedSettings = c.settings ? {
+          ...c.settings,
+          coverPhoto: resolvePublicFileUrl(c.settings.coverPhoto, req)
+        } : c.settings;
+
+        return {
+          ...c,
+          _id: c.id,
+          logo: resolvePublicFileUrl(c.logo, req),
+          settings: resolvedSettings
+        };
+      })
     });
   } catch (error) {
     next(error);
@@ -136,6 +157,11 @@ exports.getCollegePage = async (req, res, next) => {
       }
     }
 
+    const resolvedSettings = college.settings ? {
+      ...college.settings,
+      coverPhoto: resolvePublicFileUrl(college.settings.coverPhoto, req)
+    } : college.settings;
+
     res.json({
       success: true,
       data: {
@@ -143,13 +169,15 @@ exports.getCollegePage = async (req, res, next) => {
           _id: college.id,
           name: college.name,
           code: college.code,
+          slug: college.slug || college.code?.toLowerCase(),
           email: college.email,
           phone: college.phone,
           address: college.address,
           city: college.city,
           website: college.website,
-          logo: college.logo,
-          settings: college.settings
+          logo: resolvePublicFileUrl(college.logo, req),
+          coverPhoto: resolvePublicFileUrl(college.coverPhoto || resolvedSettings?.coverPhoto, req),
+          settings: resolvedSettings
         },
         admissionSeason: season ? { ...season, _id: season.id } : null,
         announcements
@@ -460,7 +488,9 @@ exports.getTenantPublicProfile = async (req, res, next) => {
     // Brief caching for performance
     res.setHeader('Cache-Control', 'public, max-age=60, s-maxage=120');
 
-    const coverPhoto = college.settings?.coverPhoto || null;
+    const rawCover = college.coverPhoto || college.settings?.coverPhoto || null;
+    const coverPhoto = resolvePublicFileUrl(rawCover, req);
+    const resolvedLogo = resolvePublicFileUrl(college.logo, req);
 
     res.json({
       success: true,
@@ -480,7 +510,7 @@ exports.getTenantPublicProfile = async (req, res, next) => {
         socialLinks: college.social_links || college.settings?.socialLinks || null,
         establishedYear: college.established_year || college.settings?.establishedYear || null,
         affiliation: college.affiliation,
-        logo: college.logo,
+        logo: resolvedLogo,
         logoKey: college.logo_key,
         coverPhoto,
         coverKey: college.cover_key,
