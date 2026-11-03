@@ -216,11 +216,11 @@ app.use('/api/fines', require('./routes/fine.routes'));
 app.use('/api/gate', require('./routes/guard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));
 app.use('/api/me', require('./routes/me.routes'));
-app.use('/api', require('./routes/fallback.routes'));
+app.use('/api/files', require('./routes/files.routes'));
 app.use('/api/analytics', require('./routes/analytics.routes'));
 app.use('/api/approvals', require('./routes/approval.routes'));
 app.use('/api/evaluations', require('./routes/evaluation.routes'));
-app.use('/api/files', require('./routes/files.routes'));
+app.use('/api', require('./routes/fallback.routes'));
 
 // Static files (uploads)
 app.use('/uploads', express.static('uploads'));

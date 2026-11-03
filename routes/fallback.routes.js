@@ -5,10 +5,8 @@ const tenantContext = require('../middleware/tenantContext');
 const { featureGate } = require('../middleware/loadEntitlements');
 const { verifyDocument, notifyParents } = require('../controllers/fallback.controller');
 
-router.use(protect, tenantContext);
-
-router.post('/verify', authorize('admin', 'principal', 'registrar'), featureGate('students'), verifyDocument);
-router.post('/notify/parents', authorize('admin', 'principal', 'teacher', 'registrar'), featureGate('announcements'), notifyParents);
+router.post('/verify', protect, tenantContext, authorize('admin', 'principal', 'registrar'), featureGate('students'), verifyDocument);
+router.post('/notify/parents', protect, tenantContext, authorize('admin', 'principal', 'teacher', 'registrar'), featureGate('announcements'), notifyParents);
 
 
 router.meta = {
