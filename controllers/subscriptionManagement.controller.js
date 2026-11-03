@@ -4,6 +4,7 @@ const { getSystemClient } = require('../config/prismaManager');
 const { logActivity } = require('../services/activityLog.service');
 const { clearEntitlementCache, getEntitlements } = require('../middleware/loadEntitlements');
 const { planKeysFor, normalizePlan } = require('../services/collegeAdapter');
+const { getCollegeLimit } = require('../services/quota');
 const mailService = require('../services/mailService');
 
 /**
@@ -50,7 +51,20 @@ exports.getSubscription = async (req, res, next) => {
     }
 
     const effectiveStatus = college.subscription_status || (currentPeriod ? currentPeriod.status : 'inactive');
-    const ent = await getEntitlements(id);
+    const [ent, maxStudents, maxStaff, studentCount, staffCount] = await Promise.all([
+      getEntitlements(id),
+      getCollegeLimit(prisma, id, 'students'),
+      getCollegeLimit(prisma, id, 'staff'),
+      prisma.student?.count ? prisma.student.count({ where: { college_id: id } }).catch(() => 0) : 0,
+      prisma.user.count({ where: { college_id: id, role: { in: ['principal', 'registrar', 'accountant', 'teacher', 'employee'] } } }).catch(() => 0)
+    ]);
+
+    const quotas = {
+      maxStudents: maxStudents === null || maxStudents < 0 ? -1 : maxStudents,
+      maxStaff: maxStaff === null || maxStaff < 0 ? -1 : maxStaff,
+      studentCount,
+      staffCount
+    };
 
     res.json({
       success: true,
@@ -67,6 +81,7 @@ exports.getSubscription = async (req, res, next) => {
         daysLeft,
         featureOverrides: college.feature_overrides || {},
         effectiveFeatures: ent.active ? ent.effectiveFeatures : [],
+        quotas,
         history
       }
     });
@@ -794,6 +809,95 @@ exports.retryMessageDelivery = async (req, res, next) => {
       success: sendRes.success,
       data: updated,
       message: sendRes.success ? 'Message redelivered successfully.' : `Retry failed: ${sendRes.error}`
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * PUT/PATCH /api/super-admin/colleges/:id/quotas
+ * Allows Super Admin to dynamically scale student & staff limits up or down.
+ */
+exports.updateQuotas = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { maxStudents, maxStaff, reason } = req.body;
+    const prisma = getSystemClient();
+
+    const college = await prisma.college.findUnique({ where: { id } });
+    if (!college) {
+      return res.status(404).json({ success: false, message: 'College not found' });
+    }
+
+    const currentSub = typeof college.subscription === 'object' && college.subscription !== null ? college.subscription : {};
+    const currentLimits = typeof currentSub.limits === 'object' && currentSub.limits !== null ? currentSub.limits : {};
+    const currentSettings = typeof college.settings === 'object' && college.settings !== null ? college.settings : {};
+    const currentOverrides = typeof college.feature_overrides === 'object' && college.feature_overrides !== null ? college.feature_overrides : {};
+
+    const parseLimit = (val) => {
+      if (val === null || val === undefined || val === '' || String(val).toLowerCase() === 'unlimited') return -1;
+      const n = Number(val);
+      return isNaN(n) ? -1 : n;
+    };
+
+    const newMaxStudents = parseLimit(maxStudents);
+    const newMaxStaff = parseLimit(maxStaff);
+
+    const updatedLimits = {
+      ...currentLimits,
+      maxStudents: newMaxStudents,
+      maxStaff: newMaxStaff
+    };
+
+    const updatedSub = {
+      ...currentSub,
+      limits: updatedLimits
+    };
+
+    const updatedSettings = {
+      ...currentSettings,
+      maxStudents: newMaxStudents,
+      maxStaff: newMaxStaff,
+      limits: updatedLimits
+    };
+
+    const updatedOverrides = {
+      ...currentOverrides,
+      maxStudents: newMaxStudents,
+      maxStaff: newMaxStaff
+    };
+
+    const updatedCollege = await prisma.college.update({
+      where: { id },
+      data: {
+        subscription: updatedSub,
+        settings: updatedSettings,
+        feature_overrides: updatedOverrides
+      }
+    });
+
+    clearEntitlementCache(id);
+
+    logActivity({
+      college_id: id,
+      actorUser: req.user,
+      action: 'COLLEGE_QUOTAS_UPDATED',
+      category: 'Administration',
+      resourceType: 'College',
+      resourceId: id,
+      title: 'College Quota Limits Adjusted',
+      description: `Student limit set to ${newMaxStudents === -1 ? 'Unlimited' : newMaxStudents}, staff limit set to ${newMaxStaff === -1 ? 'Unlimited' : newMaxStaff}.${reason ? ` Reason: ${reason}` : ''}`
+    }).catch(e => console.error('Activity log error:', e.message));
+
+    res.json({
+      success: true,
+      message: 'College student & staff limits updated successfully.',
+      data: {
+        maxStudents: newMaxStudents,
+        maxStaff: newMaxStaff,
+        college: updatedCollege
+      }
     });
   } catch (error) {
     next(error);

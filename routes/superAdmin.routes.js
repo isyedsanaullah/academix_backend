@@ -85,7 +85,8 @@ const {
   reactivateCollege,
   sendMessage,
   getMessages,
-  retryMessageDelivery
+  retryMessageDelivery,
+  updateQuotas
 } = require('../controllers/subscriptionManagement.controller');
 
 router.get('/colleges/:id/subscription', getSubscription);
@@ -93,6 +94,8 @@ router.post('/colleges/:id/subscription/assign', assignSubscription);
 router.post('/colleges/:id/subscription/renew', renewSubscription);
 router.patch('/colleges/:id/subscription/expiry', editExpiry);
 router.patch('/colleges/:id/subscription/features', editFeatureOverrides);
+router.put('/colleges/:id/quotas', updateQuotas);
+router.patch('/colleges/:id/quotas', updateQuotas);
 router.post('/colleges/:id/suspend', suspendCollege);
 router.post('/colleges/:id/reactivate', reactivateCollege);
 router.get('/colleges/:id/messages', getMessages);
