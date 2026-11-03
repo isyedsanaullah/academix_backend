@@ -11,16 +11,17 @@ exports.getStudentTemplate = async (req, res, next) => {
     const tenantDb = req.tenantClient || getSystemClient();
     const collegeId = req.collegeId;
 
-    // Fetch classes and sections for this college to generate realistic example rows
-    const classes = await tenantDb.class.findMany({
-      where: { college_id: collegeId, isActive: true },
-      take: 2
-    });
-
-    const sampleClass1 = classes[0]?.name || 'FSc Pre-Medical (Part 1)';
-    const sampleGroup1 = classes[0]?.groups?.[0] || 'Pre-Medical';
-    const sampleClass2 = classes[1]?.name || 'ICS (Part 1)';
-    const sampleGroup2 = classes[1]?.groups?.[0] || 'Computer Science';
+    // Fetch college info, all active classes, and sections
+    const [college, classes, sections] = await Promise.all([
+      tenantDb.college ? tenantDb.college.findUnique({ where: { id: collegeId }, select: { slug: true, name: true } }) : null,
+      tenantDb.class.findMany({
+        where: { college_id: collegeId, isActive: true },
+        orderBy: { name: 'asc' }
+      }),
+      tenantDb.section.findMany({
+        where: { college_id: collegeId, isActive: true }
+      })
+    ]);
 
     const headers = [
       'Name',
@@ -38,61 +39,102 @@ exports.getStudentTemplate = async (req, res, next) => {
       'Guardian Phone'
     ];
 
-    const sampleRows = [
-      [
-        'Muhammad Ahmed',
-        'Tariq Mehmood',
-        '2026-MED-001',
-        sampleClass1,
-        sampleGroup1,
-        'A',
-        'male',
-        '+92 300 1234567',
-        'ahmed@example.com',
-        '2008-05-15',
-        'House 12, Street 4, Islamabad',
-        'Tariq Mehmood',
-        '+92 300 1234567'
-      ],
-      [
-        'Fatima Zahra',
-        'Rashid Ali',
-        '2026-MED-002',
-        sampleClass1,
-        sampleGroup1,
-        'A',
-        'female',
-        '+92 301 7654321',
-        'fatima@example.com',
-        '2008-09-20',
-        'Sector F-7/2, Islamabad',
-        'Rashid Ali',
-        '+92 301 7654321'
-      ],
-      [
-        'Ali Raza',
-        'Ghulam Raza',
-        '2026-ICS-001',
-        sampleClass2,
-        sampleGroup2,
-        'B',
-        'male',
-        '+92 333 9876543',
-        'ali.raza@example.com',
-        '2008-11-10',
-        'Sector G-9/1, Islamabad',
-        'Ghulam Raza',
-        '+92 333 9876543'
-      ]
+    const dummyProfiles = [
+      { name: 'Muhammad Ahmed', father: 'Tariq Mehmood', gender: 'male' },
+      { name: 'Fatima Zahra', father: 'Rashid Ali', gender: 'female' },
+      { name: 'Ali Raza', father: 'Ghulam Raza', gender: 'male' },
+      { name: 'Ayesha Khan', father: 'Javed Iqbal', gender: 'female' },
+      { name: 'Bilal Hassan', father: 'Hassan Akhtar', gender: 'male' },
+      { name: 'Zainab Bibi', father: 'Shahid Mehmood', gender: 'female' },
+      { name: 'Hamza Malik', father: 'Asif Malik', gender: 'male' },
+      { name: 'Maryam Noor', father: 'Naveed Ahmed', gender: 'female' },
+      { name: 'Usman Farooq', father: 'Farooq Azam', gender: 'male' },
+      { name: 'Hira Siddiqui', father: 'Khalid Siddiqui', gender: 'female' },
+      { name: 'Saad Sheikh', father: 'Faisal Sheikh', gender: 'male' },
+      { name: 'Dua Javed', father: 'Javed Akhtar', gender: 'female' }
     ];
+
+    const sampleRows = [];
+    let counter = 1;
+
+    if (classes && classes.length > 0) {
+      for (const cls of classes) {
+        const groups = (Array.isArray(cls.groups) && cls.groups.length > 0) ? cls.groups : ['General'];
+        const classSections = sections.filter(s => s.class_id === cls.id);
+        const sectionCodes = classSections.length > 0
+          ? classSections.map(s => {
+              const parts = s.code.split('-');
+              return parts.length > 1 ? parts[parts.length - 1] : s.code;
+            })
+          : ['A', 'B'];
+
+        for (const grp of groups) {
+          const profile = dummyProfiles[(counter - 1) % dummyProfiles.length];
+          const sec = sectionCodes[(counter - 1) % sectionCodes.length] || 'A';
+          const admNo = `ADM-2026-${String(counter).padStart(3, '0')}`;
+
+          sampleRows.push([
+            profile.name,
+            profile.father,
+            admNo,
+            cls.name,
+            grp,
+            sec,
+            profile.gender,
+            `0300-123456${counter % 10}`,
+            `student${counter}@example.com`,
+            `200${8 - (counter % 3)}-05-15`,
+            'Main Campus Road, City',
+            profile.father,
+            `0301-765432${counter % 10}`
+          ]);
+          counter++;
+        }
+      }
+    } else {
+      // Fallback sample rows if no classes configured yet
+      sampleRows.push(
+        [
+          'Muhammad Ahmed',
+          'Tariq Mehmood',
+          'ADM-2026-001',
+          'FSc Pre-Medical (Part 1)',
+          'Pre-Medical',
+          'A',
+          'male',
+          '0300-1234567',
+          'ahmed@example.com',
+          '2008-05-15',
+          'House 12, Street 4, Islamabad',
+          'Tariq Mehmood',
+          '0301-1234567'
+        ],
+        [
+          'Fatima Zahra',
+          'Rashid Ali',
+          'ADM-2026-002',
+          'ICS (Part 1)',
+          'Computer Science',
+          'A',
+          'female',
+          '0301-7654321',
+          'fatima@example.com',
+          '2008-09-20',
+          'Sector F-7/2, Islamabad',
+          'Rashid Ali',
+          '0301-7654321'
+        ]
+      );
+    }
 
     const csvContent = [
       headers.join(','),
-      ...sampleRows.map(row => row.map(val => `"${String(val).replace(/"/g, '""')}"`).join(','))
+      ...sampleRows.map(row => row.map(val => `"${String(val || '').replace(/"/g, '""')}"`).join(','))
     ].join('\r\n');
 
+    const fileSlug = (college?.slug || 'college').toLowerCase().replace(/[^a-z0-9]/g, '_');
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', 'attachment; filename="students_import_template.csv"');
+    res.setHeader('Content-Disposition', `attachment; filename="students_template_${fileSlug}.csv"`);
     return res.send(csvContent);
   } catch (error) {
     next(error);
@@ -186,11 +228,46 @@ exports.importStudents = async (req, res, next) => {
         continue;
       }
 
-      // Validation 2: Check class existence
-      const matchedClass = classMap.get(className.toLowerCase());
+      // Validation 2: Check class existence (with smart alias & normalized matching)
+      let matchedClass = classMap.get(className.toLowerCase());
+
+      if (!matchedClass) {
+        // A. Normalized string matching (ignore parentheses, hyphens, extra whitespace)
+        const normalizeStr = (s) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normTarget = normalizeStr(className);
+        for (const [_, cls] of classMap.entries()) {
+          if (normalizeStr(cls.name) === normTarget) {
+            matchedClass = cls;
+            break;
+          }
+        }
+      }
+
+      if (!matchedClass && groupName) {
+        // B. Smart mapping for common aliases like "1st Year" / "2nd Year" + Group
+        const isPart1 = /1st|part\s*1|xi\b|first/i.test(className);
+        const isPart2 = /2nd|part\s*2|xii\b|second/i.test(className);
+        const normGroup = (groupName || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        if (isPart1 || isPart2) {
+          const targetPartNum = isPart1 ? '1' : '2';
+          for (const [_, cls] of classMap.entries()) {
+            const clsNorm = (cls.name || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+            const hasPart = clsNorm.includes(`part${targetPartNum}`) || clsNorm.includes(`${targetPartNum}st`) || clsNorm.includes(`${targetPartNum}nd`);
+            const hasGroup = clsNorm.includes(normGroup) || (cls.groups || []).some(g => (g || '').toLowerCase().replace(/[^a-z0-9]/g, '').includes(normGroup) || normGroup.includes((g || '').toLowerCase().replace(/[^a-z0-9]/g, '')));
+
+            if (hasPart && hasGroup) {
+              matchedClass = cls;
+              break;
+            }
+          }
+        }
+      }
+
       if (!matchedClass) {
         failedCount++;
-        const msg = `Unknown class '${className}'. Please create it in Academic Setup first.`;
+        const availableClassNames = Array.from(new Set(existingClasses.map(c => `"${c.name}"`))).join(', ');
+        const msg = `Unknown class '${className}'. Configured classes in your setup: ${availableClassNames || 'None'}. Please download the template or update Academic Setup.`;
         rowResults.push({ row_no: rowNo, name, rollNumber, status: 'failed', message: msg });
         await prisma.importBatchRow.create({
           data: { batch_id: batch.id, row_no: rowNo, row_hash: rowHash, status: 'failed', message: msg, data: row }

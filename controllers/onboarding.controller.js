@@ -41,9 +41,14 @@ async function computeRealOnboardingState(prisma, tenantDb, college, user) {
   const isProfileDone = hasName && hasCity && hasContact && hasLogo;
 
   // 3. Academic Step: at least 1 session and at least 1 class in DB
-  const [sessionCount, classCount] = await Promise.all([
+  const [sessionCount, classCount, activeClasses] = await Promise.all([
     tenantDb.session.count({ where: { college_id: collegeId } }).catch(() => 0),
     tenantDb.class.count({ where: { college_id: collegeId } }).catch(() => 0),
+    tenantDb.class.findMany({
+      where: { college_id: collegeId, isActive: true },
+      select: { id: true, name: true, groups: true },
+      orderBy: { name: 'asc' }
+    }).catch(() => [])
   ]);
   const isAcademicDone = sessionCount >= 1 && classCount >= 1;
 
@@ -108,6 +113,7 @@ async function computeRealOnboardingState(prisma, tenantDb, college, user) {
     academicSummary: {
       sessionCount,
       classCount,
+      classes: activeClasses || [],
       staffCount,
       studentCount
     }
