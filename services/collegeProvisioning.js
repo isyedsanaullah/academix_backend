@@ -8,42 +8,81 @@ const { PLAN_FEATURES } = require('../config/planConstants');
 const { ROOT_DOMAIN } = require('../config/env');
 const mailService = require('./mailService');
 const { logActivity } = require('./activityLog.service');
+const { addAuthorizedDomain } = require('./firebaseDomains.service');
 
 /**
  * Auto-creates a Hostinger subdomain via their REST API.
- * Runs fire-and-forget; failure is logged but never blocks provisioning.
+ * Tries the primary API path; falls back to alternate if 404/422.
+ * Returns {ok, status, message}. Never throws.
  */
 async function createHostingerSubdomain(slug) {
-  const token    = process.env.HOSTINGER_API_TOKEN;
   const username = process.env.HOSTINGER_USERNAME;
-  const domain   = process.env.HOSTINGER_DOMAIN || ROOT_DOMAIN;
+  const domain   = process.env.HOSTINGER_DOMAIN || ROOT_DOMAIN || 'collegeshub.org';
+  let   token    = process.env.HOSTINGER_API_TOKEN;
 
-  if (!token || !username) {
-    console.warn('[Hostinger] HOSTINGER_API_TOKEN or HOSTINGER_USERNAME not set — skipping subdomain creation');
-    return;
+  // Fallback: read MCP OAuth credentials file
+  if (!token) {
+    try {
+      const fs      = require('fs');
+      const path    = require('path');
+      const credDir = process.env.APPDATA || process.env.HOME || '';
+      const credPath = path.join(credDir, 'hostinger-mcp', 'credentials.json');
+      if (fs.existsSync(credPath)) {
+        token = JSON.parse(fs.readFileSync(credPath, 'utf8')).access_token || null;
+      }
+    } catch {}
   }
 
+  if (!token || !username) {
+    console.warn('[Hostinger] No API token or username - skipping subdomain creation. Set HOSTINGER_API_TOKEN and HOSTINGER_USERNAME in .env');
+    return { ok: false, reason: 'no_credentials' };
+  }
+
+  const mkOpts = (body) => ({
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const attempt = async (url, body) => {
+    const res  = await fetch(url, mkOpts(body));
+    const text = await res.text().catch(() => '');
+    let data = {};
+    try { data = JSON.parse(text); } catch {}
+    console.log(`[Hostinger] ${url} → ${res.status}: ${text.slice(0, 200)}`);
+    return { ok: res.ok || res.status === 409 || res.status === 422, status: res.status, message: data.message || text.slice(0, 200) };
+  };
+
   try {
-    const res = await fetch(
+    // Correct Hostinger API v1: POST /v1/hosting/{username}/domains/{domain}/subdomains
+    const r1 = await attempt(
       `https://api.hostinger.com/v1/hosting/${username}/domains/${domain}/subdomains`,
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          'Accept': 'application/json'
-        },
-        body: JSON.stringify({ subdomain: slug, is_using_public_directory: true })
-      }
+      { subdomain: slug, is_using_public_directory: true }
     );
-    const body = await res.json().catch(() => ({}));
-    if (res.ok) {
+    if (r1.ok) {
       console.log(`[Hostinger] ✅ Subdomain created: ${slug}.${domain}`);
-    } else {
-      console.warn(`[Hostinger] ⚠️ Subdomain creation responded ${res.status}:`, body.message || JSON.stringify(body));
+      return r1;
     }
+
+    // Fallback: website-scoped endpoint
+    if (r1.status === 404 || r1.status === 405 || r1.status === 422 || r1.status === 530) {
+      const r2 = await attempt(
+        `https://api.hostinger.com/v1/hosting/websites/${domain}/domains/subdomains`,
+        { subdomain: slug, is_using_public_directory: true }
+      );
+      if (r2.ok) {
+        console.log(`[Hostinger] ✅ Subdomain created (alt path): ${slug}.${domain}`);
+        return r2;
+      }
+      console.error(`[Hostinger] ❌ Both endpoints failed. Primary ${r1.status}: ${r1.message} | Alt ${r2.status}: ${r2.message}`);
+      return r2;
+    }
+
+    console.warn(`[Hostinger] ⚠️ Subdomain creation status ${r1.status}: ${r1.message}`);
+    return r1;
   } catch (err) {
-    console.error('[Hostinger] ❌ Subdomain creation failed:', err.message);
+    console.error('[Hostinger] ❌ Subdomain creation network error:', err.message);
+    return { ok: false, reason: 'network_error', message: err.message };
   }
 }
 
@@ -393,10 +432,12 @@ async function approveAndProvisionCollege({
       }).catch(() => {});
     });
 
-    // Auto-create Hostinger subdomain (non-blocking)
-    createHostingerSubdomain(cleanSlug).catch(err =>
-      console.error('[CollegeProvisioning] Hostinger subdomain background error:', err.message)
-    );
+    // Auto-create Hostinger subdomain + authorize domain in Firebase (both non-blocking)
+    createHostingerSubdomain(cleanSlug)
+      .then(() => addAuthorizedDomain(cleanSlug))
+      .catch(err =>
+        console.error('[CollegeProvisioning] Hostinger/Firebase background error:', err.message)
+      );
   });
 
   return {

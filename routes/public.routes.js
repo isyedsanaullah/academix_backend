@@ -20,7 +20,7 @@ const storage = multer.diskStorage({
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
 
 const { verifyInvitationToken, acceptInvitation } = require('../controllers/invitation.controller');
-const { getInviteStatus, acceptInvite } = require('../controllers/publicInvite.controller');
+const { getInviteStatus, acceptInvite, acceptInviteGoogle } = require('../controllers/publicInvite.controller');
 const { verifyPublicDocument } = require('../controllers/verify.controller');
 const rateLimit = require('express-rate-limit');
 const { noReferrer } = require('../middleware/securityHeaders');
@@ -131,6 +131,7 @@ const inviteSetupLimiter = rateLimit({
 });
 router.get('/invites/:token', inviteSetupLimiter, noReferrer, getInviteStatus);
 router.post('/invites/:token/accept', inviteSetupLimiter, noReferrer, acceptInvite);
+router.post('/invites/:token/accept-google', inviteSetupLimiter, noReferrer, acceptInviteGoogle);
 
 // Phase 6 — Staff Set Password (3-day single-use token)
 const { getSetPasswordStatus, submitSetPassword } = require('../controllers/staffInvite.controller');

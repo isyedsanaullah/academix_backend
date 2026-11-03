@@ -409,7 +409,7 @@ exports.getMe = async (req, res, next) => {
 // @access  Private
 exports.updatePassword = async (req, res, next) => {
   try {
-    const { currentPassword, newPassword } = req.body;
+    const { currentPassword, newPassword, username } = req.body;
     const prisma = getSystemClient();
 
     const user = await prisma.user.findUnique({
@@ -420,8 +420,25 @@ exports.updatePassword = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
+    // Validate username if provided
+    if (username !== undefined && username !== null && username !== '') {
+      const u = username.trim().toLowerCase();
+      if (u.length < 3) return res.status(400).json({ success: false, message: 'Username must be at least 3 characters.' });
+      if (!/^[a-z0-9_.\-]+$/.test(u)) return res.status(400).json({ success: false, message: 'Username may only contain letters, numbers, underscores, dots and hyphens.' });
+      // Check uniqueness
+      const existing = await prisma.user.findUnique({ where: { username: u } });
+      if (existing && existing.id !== user.id) {
+        return res.status(409).json({ success: false, message: `Username '${u}' is already taken.` });
+      }
+    }
+
+    const usernameUpdate = (username && username.trim()) ? { username: username.trim().toLowerCase() } : {};
+
     // Google-only users setting password for first time
     if (!user.password) {
+      if (!newPassword || newPassword.length < 8) {
+        return res.status(400).json({ success: false, message: 'Password must be at least 8 characters.' });
+      }
       const salt = await bcrypt.genSalt(12);
       const hashedPassword = await bcrypt.hash(newPassword, salt);
       
@@ -429,12 +446,19 @@ exports.updatePassword = async (req, res, next) => {
         where: { id: user.id },
         data: {
           password: hashedPassword,
-          authProvider: 'local'
+          authProvider: 'local',
+          ...usernameUpdate
         }
       });
       
       const token = generateToken(updatedUser.id, updatedUser.college_id, updatedUser.role);
       return res.json({ success: true, message: 'Password set successfully', data: { token } });
+    }
+
+    // Existing password users — only update username if that's all that was sent
+    if (!newPassword && Object.keys(usernameUpdate).length > 0) {
+      await prisma.user.update({ where: { id: user.id }, data: usernameUpdate });
+      return res.json({ success: true, message: 'Username updated successfully' });
     }
 
     const isMatch = await bcrypt.compare(currentPassword, user.password);
@@ -448,7 +472,8 @@ exports.updatePassword = async (req, res, next) => {
     const updatedUser = await prisma.user.update({
       where: { id: user.id },
       data: {
-        password: hashedPassword
+        password: hashedPassword,
+        ...usernameUpdate
       }
     });
 

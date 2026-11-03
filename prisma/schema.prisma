@@ -410,6 +410,7 @@ model College {
   isActive             Boolean?             @default(true)
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
+  subdomain_verified_at DateTime?           // set when subdomain becomes reachable + welcome email sent
   subscription_status  String?              @default("active") // active, grace, suspended
   grace_until          DateTime?
   feature_overrides    Json?                @default("{}")

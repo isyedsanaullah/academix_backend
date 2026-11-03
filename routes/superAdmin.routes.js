@@ -66,6 +66,14 @@ router.post('/colleges/:id/invite/resend', resendCollegeInvite);
 router.post('/colleges/:id/invite/revoke', revokeCollegeInvite);
 router.get('/colleges/:id/invite', getCollegeInviteStatus);
 
+// Subdomain Management + Firebase Domain Automation
+const { createCollegeSubdomain, createAllMissingSubdomains, syncFirebaseDomains, listFirebaseDomains, checkSubdomainStatus } = require('../controllers/subdomainManagement.controller');
+router.post('/colleges/:id/subdomain', createCollegeSubdomain);
+router.get('/colleges/:id/subdomain/status', checkSubdomainStatus);
+router.post('/subdomains/sync-all', createAllMissingSubdomains);
+router.post('/firebase/sync-domains', syncFirebaseDomains);
+router.get('/firebase/domains', listFirebaseDomains);
+
 // College Subscription Management & Messaging (Phase 9)
 const {
   getSubscription,

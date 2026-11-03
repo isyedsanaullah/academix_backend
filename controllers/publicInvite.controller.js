@@ -3,9 +3,10 @@
 /**
  * Phase 4 — Public Invite Acceptance Controller
  *
- * Handles the two public endpoints for the college admin invite flow:
- *   GET  /public/invites/:token  →  validate invite state (no side effects)
- *   POST /public/invites/:token/accept  →  create admin account + consume invite
+ * Handles the public endpoints for the college admin invite flow:
+ *   GET  /public/invites/:token             →  validate invite state (no side effects)
+ *   POST /public/invites/:token/accept      →  create admin account + consume invite (password)
+ *   POST /public/invites/:token/accept-google → create admin account via Google OAuth
  *
  * Security notes:
  * - Token is SHA-256-hashed before DB lookup (raw token only lives in the email URL).
@@ -23,6 +24,7 @@ const generateJwt = require('../utils/generateToken');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
 const mailService = require('../services/mailService');
+const { verifyFirebaseToken } = require('../config/firebaseAdmin');
 
 // ── Common password list (top-30 most common; expand as needed) ───────────────
 const COMMON_PASSWORDS = new Set([
@@ -310,6 +312,197 @@ exports.acceptInvite = async (req, res, next) => {
         email: adminUser.email,
         role: adminUser.role,
         emailVerified: false,
+        college: {
+          id: invite.college_id,
+          name: invite.college.name,
+          slug: invite.college.slug,
+          status: 'onboarding'
+        },
+        token: authToken
+      }
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * POST /public/invites/:token/accept-google
+ * Body: { idToken, fullName }
+ *
+ * Accept invite via Google OAuth — no password required.
+ * The invite token authorises the account creation; the Google account
+ * can be any Google account (does NOT need to match the invited email).
+ *
+ * In ONE transaction:
+ *   1. Re-validate invite (constant-time token hash check)
+ *   2. Verify Firebase idToken → get Google user info
+ *   3. Create admin user (emailVerified = true, authProvider = 'google')
+ *   4. Atomically consume invite
+ *   5. Set college status → 'onboarding'
+ *   6. Log activity
+ *   7. Return session token
+ */
+exports.acceptInviteGoogle = async (req, res, next) => {
+  try {
+    const { idToken, fullName } = req.body;
+    const rawToken = req.params.token;
+
+    // ── Input validation ──────────────────────────────────────────────────────
+    if (!idToken || typeof idToken !== 'string') {
+      return res.status(400).json({ success: false, message: 'Google ID token is required.' });
+    }
+    if (!fullName || typeof fullName !== 'string' || fullName.trim().length < 2) {
+      return res.status(400).json({ success: false, message: 'Full name must be at least 2 characters.' });
+    }
+
+    // ── Verify Firebase token ─────────────────────────────────────────────────
+    let firebaseUser;
+    try {
+      firebaseUser = await verifyFirebaseToken(idToken);
+    } catch (fbErr) {
+      if (fbErr.code === 'auth/id-token-expired') {
+        return res.status(401).json({ success: false, message: 'Google session expired. Please try signing in again.' });
+      }
+      return res.status(401).json({ success: false, message: 'Invalid Google token. Please try again.' });
+    }
+
+    const prisma = getSystemClient();
+
+    // ── Resolve + validate invite ─────────────────────────────────────────────
+    const { status, invite, tokenHash } = await resolveInvite(prisma, rawToken);
+
+    if (status !== 'valid') {
+      return res.status(400).json({
+        success: false,
+        message: 'This invite link is invalid, has expired, or has already been used.',
+        reason: status
+      });
+    }
+
+    // ── Check for existing user with invite email OR firebase UID ─────────────
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: invite.email.toLowerCase() },
+          { firebaseUid: firebaseUser.uid }
+        ]
+      }
+    });
+    if (existingUser) {
+      // If user already exists but invite is still valid, just consume invite + return token
+      // (handles browser refresh / double-submit after account was already created)
+      const consumeResult = await prisma.collegeInvite.updateMany({
+        where: { id: invite.id, used_at: null, revoked_at: null, expires_at: { gt: new Date() } },
+        data: { used_at: new Date() }
+      });
+      // Update firebaseUid if not yet linked
+      if (!existingUser.firebaseUid) {
+        await prisma.user.update({
+          where: { id: existingUser.id },
+          data: { firebaseUid: firebaseUser.uid, emailVerified: true, authProvider: 'google' }
+        });
+      }
+      const authToken = generateJwt(existingUser.id, invite.college_id, existingUser.role);
+      return res.status(200).json({
+        success: true,
+        message: 'Account already exists. Signing you in.',
+        data: {
+          _id: existingUser.id,
+          name: existingUser.name,
+          email: existingUser.email,
+          role: existingUser.role,
+          emailVerified: true,
+          avatar: existingUser.avatar || firebaseUser.picture || null,
+          college: {
+            id: invite.college_id,
+            name: invite.college.name,
+            slug: invite.college.slug,
+            status: invite.college.status
+          },
+          token: authToken
+        }
+      });
+    }
+
+    // ── Transaction: create user + consume invite + update college status ──────
+    let adminUser;
+    try {
+      adminUser = await prisma.$transaction(async (tx) => {
+        // 1. Create admin user (emailVerified = true — Google already verified)
+        const newUser = await tx.user.create({
+          data: {
+            name: fullName.trim(),
+            email: invite.email.toLowerCase(),   // always use the INVITED email as account email
+            role: 'admin',
+            college_id: invite.college_id,
+            emailVerified: true,                 // Google OAuth = email verified
+            authProvider: 'google',
+            firebaseUid: firebaseUser.uid,
+            avatar: firebaseUser.picture || null,
+            password: null                       // no password — Google-only until they set one
+          }
+        });
+
+        // 2. Atomically consume the invite
+        const consumeResult = await tx.collegeInvite.updateMany({
+          where: {
+            id: invite.id,
+            used_at: null,
+            revoked_at: null,
+            expires_at: { gt: new Date() }
+          },
+          data: { used_at: new Date() }
+        });
+
+        if (consumeResult.count === 0) {
+          throw Object.assign(new Error('INVITE_ALREADY_CONSUMED'), { code: 'INVITE_ALREADY_CONSUMED' });
+        }
+
+        // 3. Advance college status: pending_setup → onboarding
+        await tx.college.update({
+          where: { id: invite.college_id },
+          data: { status: 'onboarding' }
+        });
+
+        return newUser;
+      });
+    } catch (txErr) {
+      if (txErr.code === 'INVITE_ALREADY_CONSUMED') {
+        return res.status(409).json({
+          success: false,
+          message: 'This invite link has already been used. Please contact Collegeshub support.',
+          reason: 'used'
+        });
+      }
+      throw txErr;
+    }
+
+    // ── Activity log ──────────────────────────────────────────────────────────
+    logActivity({
+      college_id: invite.college_id,
+      actorUser: adminUser,
+      action: ACTIONS.CREATE || 'INVITE_ACCEPTED',
+      category: CATEGORIES.AUTHENTICATION || 'authentication',
+      resourceType: 'User',
+      resourceId: adminUser.id,
+      title: 'College Admin Account Created via Google',
+      description: `${fullName.trim()} accepted the invite via Google and created the admin account for ${invite.college.name}.`
+    }).catch(e => console.error('[Phase4-Google] Activity log error:', e.message));
+
+    // ── Issue JWT session ─────────────────────────────────────────────────────
+    const authToken = generateJwt(adminUser.id, invite.college_id, adminUser.role);
+
+    return res.status(201).json({
+      success: true,
+      message: 'Account created successfully via Google.',
+      data: {
+        _id: adminUser.id,
+        name: adminUser.name,
+        email: adminUser.email,
+        role: adminUser.role,
+        emailVerified: true,
+        avatar: adminUser.avatar,
         college: {
           id: invite.college_id,
           name: invite.college.name,

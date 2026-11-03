@@ -58,3 +58,7 @@ Thumbs.db
 *.njsproj
 *.sln
 *.sw?
+
+# Firebase service account (NEVER commit)
+config/firebase-service-account.json
+*.service-account.json
