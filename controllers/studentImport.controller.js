@@ -128,11 +128,6 @@ exports.getStudentTemplate = async (req, res, next) => {
       );
     }
 
-    const csvContent = [
-      headers.join(','),
-      ...sampleRows.map(row => row.map(val => `"${String(val || '').replace(/"/g, '""')}"`).join(','))
-    ].join('\r\n');
-
     const fileSlug = (college?.slug || 'college').toLowerCase().replace(/[^a-z0-9]/g, '_');
 
     // Excel Format Requested
