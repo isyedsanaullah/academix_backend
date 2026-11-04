@@ -4,8 +4,11 @@
  * Safe for multi-instance Render deploys. Includes reaper for stuck PROCESSING rows.
  */
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { getSystemClient } = require('../config/prismaManager');
+
+function getPrisma() {
+  return getSystemClient();
+}
 
 const MAX_ATTEMPTS = 3;
 const BATCH_SIZE = 10;
@@ -67,6 +70,7 @@ function nextAttemptAt(attempts) {
 // Reaper: reset stuck PROCESSING rows
 // ---------------------------------------------------------------------------
 async function reaperSweep() {
+  const prisma = getPrisma();
   const stuckBefore = new Date(Date.now() - STUCK_THRESHOLD_MS);
   const reset = await prisma.outboxEvent.updateMany({
     where: { status: 'PROCESSING', updatedAt: { lt: stuckBefore } },
@@ -81,6 +85,7 @@ async function reaperSweep() {
 // Main drain loop
 // ---------------------------------------------------------------------------
 async function drainOnce() {
+  const prisma = getPrisma();
   // Run reaper first
   await reaperSweep();
 

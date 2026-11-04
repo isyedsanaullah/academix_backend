@@ -4,8 +4,12 @@
  * All side-effects are written to OutboxEvent inside the same transaction.
  */
 
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { getSystemClient } = require('../config/prismaManager');
+const { PLAN_LIMITS } = require('../config/planConstants');
+
+function getPrisma() {
+  return getSystemClient();
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -39,13 +43,20 @@ async function nextReceiptNumber(tx, year) {
 /**
  * Get effective limits for a college based on pinned PlanVersion + CollegeQuotaOverride + active addons.
  */
-async function getEffectiveLimits(tx, college) {
-  // Load pinned PlanVersion
-  const pv = college.planVersionId
-    ? await tx.planVersion.findUnique({ where: { id: college.planVersionId } })
-    : null;
+async function getEffectiveLimits(tx, college, targetPlanId = null) {
+  const planToUse = targetPlanId || college.planId || 'starter';
+  let pv = null;
+  if (!targetPlanId && college.planVersionId) {
+    pv = await tx.planVersion.findUnique({ where: { id: college.planVersionId } });
+  }
+  if (!pv) {
+    pv = await tx.planVersion.findFirst({
+      where: { planId: planToUse },
+      orderBy: { version: 'desc' },
+    });
+  }
 
-  const baseLimits = pv ? pv.limitsJson : {};
+  const baseLimits = pv?.limitsJson || PLAN_LIMITS[planToUse] || PLAN_LIMITS.starter;
 
   // Apply CollegeQuotaOverrides
   const overrides = await tx.collegeQuotaOverride.findMany({
@@ -56,17 +67,6 @@ async function getEffectiveLimits(tx, college) {
     effectiveLimits[ov.metric] = Number(ov.overrideValue); // -1 = unlimited
   }
 
-  // Stack active addons on top
-  const now = new Date();
-  const addons = await tx.collegeAddon.findMany({
-    where: { college_id: college.id, expiresAt: { gt: now } },
-  });
-  for (const addon of addons) {
-    // addons contribute to specific metric keys depending on addonType
-    // e.g. STUDENTS addon adds to maxStudents — handled in entitlements.js
-    // Here we just return the base+override; addon stacking done by entitlements.js
-  }
-
   return effectiveLimits;
 }
 
@@ -75,15 +75,18 @@ async function getEffectiveLimits(tx, college) {
  * Throws with structured error on violation.
  */
 async function validateCaps(tx, college, payment, effectiveLimits) {
-  const usageRow = await tx.collegeUsage.findFirst({
-    where: { college_id: college.id },
+  const usageRows = await tx.collegeUsage.findMany({
+    where: { college_id: college.id, period: 'total' },
   });
-  if (!usageRow) return; // no usage data yet — pass
+  const usageMap = {};
+  for (const row of usageRows) {
+    usageMap[row.metric] = Number(row.value);
+  }
 
   const checks = [
-    { metric: 'students',    usage: usageRow.students,    limit: effectiveLimits.maxStudents },
-    { metric: 'staff',       usage: usageRow.staff,       limit: effectiveLimits.maxStaff },
-    { metric: 'storageBytes',usage: usageRow.storageBytes, limit: effectiveLimits.maxStorageBytes },
+    { metric: 'students',    usage: usageMap.students || 0,    limit: effectiveLimits.maxStudents },
+    { metric: 'staff',       usage: usageMap.staff || 0,       limit: effectiveLimits.maxStaff },
+    { metric: 'storageBytes',usage: usageMap.storageBytes || 0, limit: effectiveLimits.maxStorageBytes },
   ];
 
   for (const { metric, usage, limit } of checks) {
@@ -108,6 +111,7 @@ async function validateCaps(tx, college, payment, effectiveLimits) {
  */
 async function approvePayment(paymentId, adminUserId, opts = {}) {
   const { overrideNote, verifiedAmountOverride, ipAddress } = opts;
+  const prisma = getPrisma();
 
   return await prisma.$transaction(async (tx) => {
     // 1. Load payment
@@ -154,21 +158,24 @@ async function approvePayment(paymentId, adminUserId, opts = {}) {
     }
 
     // 7. Load effective limits
-    const effectiveLimits = await getEffectiveLimits(tx, college);
+    const targetPlanId = (payment.type === 'UPGRADE' || payment.type === 'DOWNGRADE') ? payment.planId : college.planId;
+    const effectiveLimits = await getEffectiveLimits(tx, college, targetPlanId);
 
     // 8. Cap re-validation
     if (['UPGRADE', 'ADDON_ORDER'].includes(payment.type)) {
       await validateCaps(tx, college, payment, effectiveLimits);
     } else if (payment.type === 'RENEWAL') {
       // Warn-only: log audit entry but do NOT block
-      const usageRow = await tx.collegeUsage.findFirst({ where: { college_id: college.id } });
-      if (usageRow && Number(usageRow.students) > Number(effectiveLimits.maxStudents || Infinity)) {
+      const usageRow = await tx.collegeUsage.findUnique({
+        where: { college_id_metric_period: { college_id: college.id, metric: 'students', period: 'total' } }
+      });
+      if (usageRow && Number(usageRow.value) > Number(effectiveLimits.maxStudents || Infinity)) {
         await tx.collegeEntitlementAudit.create({
           data: {
             college_id: college.id,
             actorUserId: adminUserId,
             action: 'RENEWAL_OVERCAP_WARNING',
-            reason: `Renewal approved with students (${usageRow.students}) exceeding plan limit (${effectiveLimits.maxStudents})`,
+            reason: `Renewal approved with students (${usageRow.value}) exceeding plan limit (${effectiveLimits.maxStudents})`,
             paymentId,
             ipAddress: ipAddress || null,
           },
@@ -250,8 +257,8 @@ async function approvePayment(paymentId, adminUserId, opts = {}) {
           addonType: item.addonType,
           quantity: item.quantity,
           expiresAt,
-          activatedAt: now,
-          paymentId,
+          startsAt: now,
+          sourcePaymentId: paymentId,
         },
       });
     }
@@ -308,6 +315,7 @@ async function rejectPayment(paymentId, adminUserId, { reason, ipAddress } = {})
     throw Object.assign(new Error('REJECTION_REASON_REQUIRED'), { status: 400 });
   }
 
+  const prisma = getPrisma();
   return await prisma.$transaction(async (tx) => {
     const updateResult = await tx.collegeSubscriptionPayment.updateMany({
       where: { id: paymentId, status: 'PENDING' },
@@ -352,6 +360,7 @@ async function submitPayment(collegeId, submitterId, payload) {
     transactionId: rawTxId, screenshotUrl,
   } = payload;
 
+  const prisma = getPrisma();
   const transactionId = cleanTid(rawTxId);
 
   // Exact duplicate check at submit time
@@ -408,7 +417,7 @@ async function submitPayment(collegeId, submitterId, payload) {
       type,
       planId,
       billingCycle,
-      lineItems,
+      lineItems: lineItems || [],
       expectedAmount,
       amountPaid,
       paymentMethod,

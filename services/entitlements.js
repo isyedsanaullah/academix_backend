@@ -30,6 +30,7 @@ async function getEntitlements(collegeId, dbClient = null) {
       id: true,
       name: true,
       planId: true,
+      planVersionId: true,
       billingCycle: true,
       subStatus: true,
       trialEndsAt: true,
@@ -37,6 +38,7 @@ async function getEntitlements(collegeId, dbClient = null) {
       periodEnd: true,
       annualQuotaCycleStart: true,
       forceReadOnly: true,
+      readOnlyReason: true,
       feature_overrides: true,
       addons: {
         where: {
@@ -50,7 +52,8 @@ async function getEntitlements(collegeId, dbClient = null) {
             { expiresAt: { gt: now } }
           ]
         }
-      }
+      },
+      quotaOverrides: true
     }
   });
 
@@ -59,15 +62,34 @@ async function getEntitlements(collegeId, dbClient = null) {
   }
 
   const planId = normalizePlanId(college.planId || 'starter');
-  const baseLimits = PLAN_LIMITS[planId] || PLAN_LIMITS.starter;
+  let baseLimits = PLAN_LIMITS[planId] || PLAN_LIMITS.starter;
+
+  // Phase 6C: Read pinned PlanVersion limits if available
+  if (college.planVersionId) {
+    const pv = await prisma.planVersion.findUnique({
+      where: { id: college.planVersionId }
+    });
+    if (pv && pv.limitsJson && typeof pv.limitsJson === 'object') {
+      baseLimits = { ...baseLimits, ...pv.limitsJson };
+    }
+  }
+
+  // Phase 6B: CollegeQuotaOverride replaces base limit
+  const baseWithOverrides = { ...baseLimits };
+  if (college.quotaOverrides && college.quotaOverrides.length > 0) {
+    for (const qo of college.quotaOverrides) {
+      const val = Number(qo.overrideValue);
+      baseWithOverrides[qo.metric] = val; // -1 = unlimited
+    }
+  }
 
   // 2. Compute View-Only (Read-Only) Lock Status
   let isReadOnly = false;
-  let readOnlyReason = null;
+  let readOnlyReason = college.readOnlyReason || null;
 
   if (college.forceReadOnly) {
     isReadOnly = true;
-    readOnlyReason = 'ADMIN_FORCED';
+    readOnlyReason = college.readOnlyReason || 'ADMIN_FORCED';
   } else if (college.subStatus === 'SUSPENDED') {
     isReadOnly = true;
     readOnlyReason = 'SUSPENDED';
@@ -138,25 +160,30 @@ async function getEntitlements(collegeId, dbClient = null) {
   }
 
   // 4. Compute Effective Limits
+  const calcLimit = (base, addon = 0) => {
+    if (base === -1 || base === Infinity) return -1;
+    return (base || 0) + addon;
+  };
+
   const effectiveLimits = {
-    maxStudents: baseLimits.maxStudents + addonCapacity.students,
-    maxStaff: baseLimits.maxStaff + addonCapacity.staff,
-    maxAdmins: baseLimits.maxAdmins + addonCapacity.admins,
-    maxCampuses: baseLimits.maxCampuses + addonCapacity.campuses,
-    maxStorageBytes: baseLimits.maxStorageBytes + (addonCapacity.storageGb * 1073741824),
-    maxUploadBytes: baseLimits.maxUploadBytes,
-    maxApplications: baseLimits.maxApplications + addonCapacity.applications,
-    messageCreditsMonthly: baseLimits.messageCreditsMonthly,
-    aiCreditsMonthly: baseLimits.aiCreditsMonthly,
-    tutorDailyPerStudent: baseLimits.tutorDailyPerStudent,
-    aiQuizGenerationsMonthly: baseLimits.aiQuizGenerationsMonthly,
-    aiNotesMonthly: baseLimits.aiNotesMonthly,
-    documentOcrMonthly: baseLimits.documentOcrMonthly,
-    noticeTranslationMonthly: baseLimits.noticeTranslationMonthly,
-    askYourDataMonthly: baseLimits.askYourDataMonthly,
-    exportsMonthly: { ...baseLimits.exportsMonthly },
-    apiCallsMonthly: baseLimits.apiCallsMonthly,
-    backupZipMonthly: baseLimits.backupZipMonthly
+    maxStudents: calcLimit(baseWithOverrides.maxStudents, addonCapacity.students),
+    maxStaff: calcLimit(baseWithOverrides.maxStaff, addonCapacity.staff),
+    maxAdmins: calcLimit(baseWithOverrides.maxAdmins, addonCapacity.admins),
+    maxCampuses: calcLimit(baseWithOverrides.maxCampuses, addonCapacity.campuses),
+    maxStorageBytes: calcLimit(baseWithOverrides.maxStorageBytes, addonCapacity.storageGb * 1073741824),
+    maxUploadBytes: baseWithOverrides.maxUploadBytes,
+    maxApplications: calcLimit(baseWithOverrides.maxApplications, addonCapacity.applications),
+    messageCreditsMonthly: baseWithOverrides.messageCreditsMonthly,
+    aiCreditsMonthly: baseWithOverrides.aiCreditsMonthly,
+    tutorDailyPerStudent: baseWithOverrides.tutorDailyPerStudent,
+    aiQuizGenerationsMonthly: baseWithOverrides.aiQuizGenerationsMonthly,
+    aiNotesMonthly: baseWithOverrides.aiNotesMonthly,
+    documentOcrMonthly: baseWithOverrides.documentOcrMonthly,
+    noticeTranslationMonthly: baseWithOverrides.noticeTranslationMonthly,
+    askYourDataMonthly: baseWithOverrides.askYourDataMonthly,
+    exportsMonthly: typeof baseWithOverrides.exportsMonthly === 'object' ? { ...baseWithOverrides.exportsMonthly } : baseWithOverrides.exportsMonthly,
+    apiCallsMonthly: baseWithOverrides.apiCallsMonthly,
+    backupZipMonthly: baseWithOverrides.backupZipMonthly
   };
 
   // 5. Build Overrides Map

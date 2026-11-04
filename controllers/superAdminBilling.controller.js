@@ -4,8 +4,11 @@
  */
 
 const { approvePayment, rejectPayment } = require('../services/settlementService');
-const { PrismaClient } = require('@prisma/client');
-const prisma = new PrismaClient();
+const { getSystemClient } = require('../config/prismaManager');
+
+function getPrisma() {
+  return getSystemClient();
+}
 
 // ---------------------------------------------------------------------------
 // GET /api/super-admin/billing/pending
@@ -13,6 +16,7 @@ const prisma = new PrismaClient();
 // ---------------------------------------------------------------------------
 async function getPendingPayments(req, res) {
   try {
+    const prisma = getPrisma();
     const payments = await prisma.collegeSubscriptionPayment.findMany({
       where: { status: 'PENDING' },
       include: {
@@ -41,6 +45,7 @@ async function getPendingPayments(req, res) {
 // ---------------------------------------------------------------------------
 async function getAllPayments(req, res) {
   try {
+    const prisma = getPrisma();
     const { status, college_id, from, to, page = 1, limit = 20 } = req.query;
     const where = {};
     if (status) where.status = status;
@@ -118,6 +123,7 @@ async function rejectPaymentHandler(req, res) {
 async function getReceiptUrl(req, res) {
   const { paymentId } = req.params;
   try {
+    const prisma = getPrisma();
     const payment = await prisma.collegeSubscriptionPayment.findUnique({
       where: { id: paymentId },
     });
@@ -148,6 +154,7 @@ async function verifyReceipt(req, res) {
   }
 
   try {
+    const prisma = getPrisma();
     const payment = await prisma.collegeSubscriptionPayment.findFirst({
       where: { receiptNumber },
       include: { college: { select: { name: true, planId: true } } },
