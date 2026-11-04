@@ -36,6 +36,22 @@ const protect = async (req, res, next) => {
         message: 'Account has been deactivated'
       });
     }
+
+    // Phase 6A: Token epoch session revocation check
+    if (user.college_id) {
+      const college = await prisma.college.findUnique({
+        where: { id: user.college_id },
+        select: { tokenEpoch: true }
+      });
+      if (college && typeof decoded.tokenEpoch === 'number' && decoded.tokenEpoch < college.tokenEpoch) {
+        return res.status(401).json({
+          success: false,
+          code: 'TOKEN_EPOCH_EXPIRED',
+          message: 'Session revoked — please log in again'
+        });
+      }
+    }
+
     req.user = {
       ...user,
       _id: user.id
