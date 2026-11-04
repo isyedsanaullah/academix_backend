@@ -143,6 +143,7 @@ app.use('/api/admin/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/colleges/onboarding', require('./routes/onboarding.routes'));
 app.use('/api/colleges', require('./routes/college.routes'));
+app.use('/api/subscription', require('./routes/subscription.routes'));
 app.use('/api/sessions', require('./routes/session.routes'));
 app.use('/api/classes', require('./routes/class.routes'));
 app.use('/api/groups', require('./routes/group.routes'));

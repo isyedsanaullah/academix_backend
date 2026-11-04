@@ -414,9 +414,34 @@ model College {
   subscription_status  String?              @default("active") // active, grace, suspended
   grace_until          DateTime?
   feature_overrides    Json?                @default("{}")
+  planId               String               @default("starter")
+  billingCycle         String               @default("MONTHLY") // MONTHLY, YEARLY
+  subStatus            String               @default("TRIAL") // TRIAL, ACTIVE, SUSPENDED
+  trialEndsAt          DateTime?
+  periodStart          DateTime?
+  periodEnd            DateTime?
+  annualQuotaCycleStart DateTime?           @default(now())
+  forceReadOnly        Boolean              @default(false)
   invites              CollegeInvite[]
   subscriptionPeriods  SubscriptionPeriod[]
   message_deliveries   MessageDelivery[]
+  addons               CollegeAddon[]
+  subscriptionPayments CollegeSubscriptionPayment[]
+  messageLedgerEntries MessageCreditLedgerEntry[]
+  aiLedgerEntries      AICreditLedgerEntry[]
+  featureOverrides     CollegeFeatureOverride[]
+
+  // Phase 6 fields
+  preSuspendStatus         String?  // stores prior subStatus before suspension
+  trialExtensionCount      Int      @default(0) // max 2 lifetime extensions
+  readOnlyReason           String?  // 'SUBSCRIPTION_EXPIRED' | 'TRIAL_EXPIRED' | null (manual = null)
+  tokenEpoch               Int      @default(0) // bumped ONLY on suspend/reactivate/forced revocation
+  planVersionId            String?  // FK to PlanVersion.id (pinned until renewal)
+  pendingDowngradePlanId   String?  // set on DOWNGRADE approval; applied at renewal
+  pendingDowngradeBillingCycle String? // billing cycle for pending downgrade
+  planVersion              PlanVersion? @relation(fields: [planVersionId], references: [id])
+  quotaOverrides           CollegeQuotaOverride[]
+  entitlementAudits        CollegeEntitlementAudit[]
 
   @@index([status])
   @@index([subscription(path: "status")])
@@ -1202,6 +1227,8 @@ model Subscription {
   restrictions   String[]
   limits         Json?
   price          Json?
+  priceMonthlyPkr Int?
+  priceYearlyPkr  Int?
   isAI           Boolean? @default(false)
   isActive       Boolean? @default(true)
   kind           String?  @default("standard")
@@ -1452,19 +1479,26 @@ model CollegeUsage {                   // atomic quota counters (see services/qu
 }
 
 model CollegeEntitlementAudit {
-  id          String   @id @default(uuid())
-  college_id  String
-  actorUserId String
-  actorEmail  String?
-  action      String                   // OVERRIDE_ON, OVERRIDE_OFF, RESET, PLAN_CHANGE, CUSTOM_PLAN_SAVE, KILL_SWITCH, QUOTA_EDIT, METHOD_PREF, SERVICE_CHOICE
-  featureKey  String?
-  previousVal String?
-  newVal      String?
-  reason      String?
-  createdAt   DateTime @default(now())
+  id              String   @id @default(uuid())
+  college_id      String
+  actorUserId     String
+  actorEmail      String?
+  action          String   // QUOTA_OVERRIDE, FEATURE_OVERRIDE, SUSPEND, REACTIVATE, EXTEND_TRIAL, CREDIT_ADJUSTMENT, SETTLEMENT_APPROVE, SETTLEMENT_REJECT, RENEWAL_OVERCAP_WARNING, DOWNGRADE_DEFER, CLEAR_READONLY
+  featureKey      String?
+  beforeStateJson Json?    // migrated from previousVal String? via raw SQL
+  afterStateJson  Json?    // migrated from newVal String? via raw SQL
+  reason          String?
+  paymentId       String?
+  ipAddress       String?
+  createdAt       DateTime @default(now())
 
+  // onDelete: Restrict — block college hard-delete if audit rows exist; use College.deletedAt soft-delete
+  college         College  @relation(fields: [college_id], references: [id], onDelete: Restrict)
+
+  // Immutability enforced by DB trigger (prevent_audit_mutation) applied in raw SQL migration
   @@index([college_id, createdAt(sort: Desc)])
   @@index([featureKey])
+  @@index([paymentId])
 }
 
 model FallbackEvent {                  // how often Plan B was used; drives the usage page and upgrade prompts
@@ -2090,3 +2124,189 @@ model ImportBatchRow {
   @@index([batch_id, row_no])
 }
 
+model AddonCatalog {
+  id                  String   @id @default(uuid())
+  addonType           String   // STUDENTS, STAFF, ADMINS, STORAGE_GB, APPLICATIONS, CAMPUS, AI_TOKENS_1M, AI_TOKENS_5M, SMS_PACK_500, SMS_PACK_2000, SMS_PACK_5000, MODULE_LIBRARY, MODULE_CANTEEN, MODULE_TRANSPORT, MODULE_HOSTEL
+  planId              String   // starter, standard, premium, enterprise
+  name                String
+  unitPriceMonthlyPkr Int
+  unitPriceYearlyPkr  Int
+  isAvailable         Boolean  @default(true)
+  maxCapPercentOfBase Int?
+  maxUnitsStatic      Int?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@unique([addonType, planId])
+  @@index([planId])
+}
+
+model CollegeAddon {
+  id              String    @id @default(uuid())
+  college_id      String
+  addonType       String    // STUDENTS, STAFF, ADMINS, STORAGE_GB, APPLICATIONS, CAMPUS, MODULE_LIBRARY, MODULE_CANTEEN, MODULE_TRANSPORT, MODULE_HOSTEL
+  quantity        Int       @default(1)
+  startsAt        DateTime  @default(now())
+  expiresAt       DateTime
+  sourcePaymentId String?
+  createdAt       DateTime  @default(now())
+  college         College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id, expiresAt])
+}
+
+model CollegeSubscriptionPayment {
+  id              String    @id @default(uuid())
+  college_id      String
+  type            String    // RENEWAL, UPGRADE, DOWNGRADE, ADDON_ORDER, CREDIT_ORDER, MIXED
+  planId          String?
+  billingCycle    String?   // MONTHLY, YEARLY
+  lineItems       Json      // [{ itemType, addonType, quantity, unitPrice, subtotal }]
+  expectedAmount  Int
+  amountPaid      Int
+  paymentMethod   String    // BANK_TRANSFER, RAAST, EASYPAISA, JAZZCASH
+  transactionId   String    // normalized: UPPER(TRIM), [^A-Z0-9] stripped
+  screenshotUrl   String
+  status          String    @default("PENDING") // PENDING, APPROVED, REJECTED, CANCELLED
+  rejectionReason String?
+  overrideNote    String?
+  submittedBy     String
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  // Phase 6A additive fields
+  verifiedAmount       Int?     // settled PKR (may differ from amountPaid after Super Admin override)
+  receiptNumber        String?  @unique // RCP-YYYY-XXXXX sequential, gap-free
+  taxAmountPkr         Int?     // populated only if OD-01 -> formal GST invoice
+  isDuplicateSuspected Boolean  @default(false) // fuzzy duplicate flag (cross-method or amount+date match)
+
+  college   College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  // NOTE: @@unique([paymentMethod, transactionId]) removed — replaced by partial unique index
+  // applied as raw SQL migration (see migration script) to exclude REJECTED and CANCELLED rows.
+  // Remove the @@unique from here so prisma migrate does not recreate it.
+  @@index([college_id, status])
+  @@index([status])
+  @@index([isDuplicateSuspected])
+}
+
+model MessageCreditLedgerEntry {
+  id           String   @id @default(uuid())
+  college_id   String
+  bucket       String   // PLAN, PURCHASED
+  periodKey    String?  // YYYY-MM for PLAN, null for PURCHASED
+  delta        Int
+  type         String   // MONTHLY_GRANT, PURCHASE, SMS_DEBIT, WHATSAPP_DEBIT, ADJUSTMENT
+  balanceAfter Int
+  referenceId  String?
+  createdAt    DateTime @default(now())
+  college      College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@unique([college_id, bucket, periodKey])
+  @@index([college_id, bucket, createdAt])
+}
+
+model AICreditLedgerEntry {
+  id           String   @id @default(uuid())
+  college_id   String
+  bucket       String   // PLAN, PURCHASED
+  periodKey    String?  // YYYY-MM for PLAN, null for PURCHASED
+  delta        Int
+  type         String   // MONTHLY_GRANT, PURCHASE, TASK_DEBIT
+  balanceAfter Int
+  taskType     String?
+  createdAt    DateTime @default(now())
+  college      College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@unique([college_id, bucket, periodKey])
+  @@index([college_id, bucket, createdAt])
+}
+
+model CollegeFeatureOverride {
+  id         String    @id @default(uuid())
+  college_id String
+  featureKey String
+  state      String    // FORCE_ON, FORCE_OFF
+  expiresAt  DateTime?
+  reason     String?
+  createdBy  String
+  createdAt  DateTime  @default(now())
+  college    College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@unique([college_id, featureKey])
+  @@index([college_id])
+}
+
+// ======================= PHASE 6 NEW MODELS =======================
+
+model PlanVersion {
+  id            String    @id @default(uuid())
+  planId        String                          // references Subscription.planId
+  version       Int
+  pricesJson    Json                            // { monthlyPkr: Int, yearlyPkr: Int }
+  limitsJson    Json                            // full limits blob (all metric keys)
+  effectiveFrom DateTime  @default(now())
+  createdAt     DateTime  @default(now())
+  createdBy     String                          // Super Admin userId
+
+  colleges      College[]
+
+  @@unique([planId, version])
+  @@index([planId, effectiveFrom(sort: Desc)])
+}
+
+model CollegeQuotaOverride {
+  id            String   @id @default(uuid())
+  college_id    String
+  metric        String   // Any key from PlanVersion.limitsJson (maxStudents, maxStaff, etc.)
+  overrideValue BigInt   // -1 = unlimited sentinel
+  reason        String
+  createdBy     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  college       College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@unique([college_id, metric])
+  @@index([college_id])
+}
+
+model ReceiptCounter {
+  year    Int @id
+  lastSeq Int @default(0)
+}
+
+model OutboxEvent {
+  id            String    @id @default(uuid())
+  eventType     String    // RECEIPT_EMAIL, IN_APP_NOTIFICATION, ENTITLEMENT_CHANGED, ANNOUNCEMENT_FANOUT
+  payload       Json
+  status        String    @default("PENDING") // PENDING, PROCESSING, DONE, FAILED
+  attempts      Int       @default(0)
+  nextAttemptAt DateTime  @default(now())
+  lastError     String?
+  processedAt   DateTime?
+  updatedAt     DateTime  @updatedAt
+  createdAt     DateTime  @default(now())
+
+  @@index([status, nextAttemptAt])
+}
+
+model SubscriptionReminderLog {
+  id         String   @id @default(uuid())
+  college_id String
+  eventType  String   // RENEWAL_30D, RENEWAL_14D, RENEWAL_7D, RENEWAL_1D, TRIAL_3D, TRIAL_1D, GRANDFATHER_90D, GRANDFATHER_60D, GRANDFATHER_30D, GRANDFATHER_14D, EXPIRY_TRANSITION
+  sentDate   DateTime @db.Date // Calendar date YYYY-MM-DD in PKT â€” unique guard against same-day re-send
+  createdAt  DateTime @default(now())
+
+  @@unique([college_id, eventType, sentDate])
+  @@index([college_id])
+}
+
+model UsedStepUpToken {
+  jti       String   @id
+  usedAt    DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+}

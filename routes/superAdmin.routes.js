@@ -118,6 +118,21 @@ const signatureUpload = multer({
 });
 router.post('/branding/signature', signatureUpload.single('signature'), uploadPlatformSignature);
 
+// ---- Phase 6A: Billing Settlement Queue ----
+const {
+  getPendingPayments,
+  getAllPayments,
+  approvePaymentHandler,
+  rejectPaymentHandler,
+  getReceiptUrl,
+} = require('../controllers/superAdminBilling.controller');
+
+router.get('/billing/pending', getPendingPayments);
+router.get('/billing/all', getAllPayments);
+router.post('/billing/approve/:paymentId', approvePaymentHandler);
+router.post('/billing/reject/:paymentId', rejectPaymentHandler);
+router.get('/billing/receipt/:paymentId', getReceiptUrl);
+
 router.meta = {
   "exempt": "platform",
   "reason": "Platform super-admin multi-tenant control plane"

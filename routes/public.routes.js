@@ -8,7 +8,7 @@ const {
   resolveRoutingCode
 } = require('../controllers/public.controller');
 const { resolveCodeLimiter } = require('../middleware/rateLimit');
-const { submitSubscriptionRequest, submitContactForm, getSubscriptionPlans } = require('../controllers/subscriptionRequest.controller');
+const { submitSubscriptionRequest, submitContactForm, getSubscriptionPlans, getPublicServicesCatalog } = require('../controllers/subscriptionRequest.controller');
 const multer = require('multer');
 const path = require('path');
 
@@ -146,6 +146,7 @@ router.get('/application-status/:appNumber', checkStatus);
 router.post('/subscription-request', submitSubscriptionRequest);
 router.get('/subscription-plans', getSubscriptionPlans);
 router.get('/plans', getSubscriptionPlans);
+router.get('/services-catalog', getPublicServicesCatalog);
 router.post('/contact', submitContactForm);
 
 // Invitation Acceptance Public Routes (Rate Limited)
@@ -173,3 +174,6 @@ router.post('/set-password/:token', inviteSetupLimiter, noReferrer, submitSetPas
 router.meta = { exempt: 'public', reason: 'Public portal; apply endpoint gated per-college' };
 module.exports = router;
 
+// Phase 6A: Public receipt verification (HMAC-signed, minimal data)
+const { verifyReceipt } = require('../controllers/superAdminBilling.controller');
+router.get('/verify-receipt/:receiptNumber', verifyReceipt);

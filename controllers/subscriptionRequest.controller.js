@@ -15,11 +15,14 @@ const {
   getCollegeInviteStatus: serviceGetInviteStatus
 } = require('../services/collegeProvisioning');
 
-const VALID_PLANS = ['free', 'basic', 'starter', 'standard', 'premium', 'enterprise', 'ownership', 'custom', 'professional'];
+const { CANONICAL_PLANS, PLAN_LEVEL, PLAN_PRICING, PLAN_LIMITS } = require('../config/planConstants');
+const { CATEGORIES, FEATURE_REGISTRY } = require('../config/featureRegistry');
+
+const VALID_PLANS = ['starter', 'standard', 'premium', 'enterprise', 'free', 'basic', 'ownership', 'custom', 'professional'];
 const VALID_STATUSES = ['new', 'contacted', 'approved', 'rejected'];
 
 /**
- * @desc    Get all active subscription plans for public display
+ * @desc    Get all active subscription plans and add-on catalog for public display
  * @route   GET /api/public/subscription-plans
  * @access  Public
  */
@@ -27,12 +30,84 @@ exports.getSubscriptionPlans = async (req, res, next) => {
   try {
     const prisma = getSystemClient();
     const plans = await prisma.subscription.findMany({
-      where: { isActive: true },
-      orderBy: { createdAt: 'asc' }
+      where: {
+        isActive: true,
+        planId: { in: CANONICAL_PLANS }
+      }
     });
+
+    // Sort canonically: starter -> standard -> premium -> enterprise
+    plans.sort((a, b) => (PLAN_LEVEL[a.planId] ?? 0) - (PLAN_LEVEL[b.planId] ?? 0));
+
+    // Fetch public add-on pricing catalog
+    const addons = await prisma.addonCatalog.findMany({
+      where: { isAvailable: true },
+      orderBy: [{ addonType: 'asc' }, { planId: 'asc' }]
+    });
+
     res.json({
       success: true,
-      data: plans
+      data: {
+        plans,
+        addons,
+        counts: {
+          starter: 33,
+          standard: 88,
+          premium: 141,
+          enterprise: 162
+        }
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * @desc    Get full 162-service catalog across 10 categories for public directory
+ * @route   GET /api/public/services-catalog
+ * @access  Public
+ */
+exports.getPublicServicesCatalog = async (req, res, next) => {
+  try {
+    const { category, plan, search } = req.query;
+
+    let filtered = [...FEATURE_REGISTRY];
+
+    if (category) {
+      filtered = filtered.filter(f => f.category.toLowerCase() === category.toLowerCase());
+    }
+
+    if (plan) {
+      const targetLvl = PLAN_LEVEL[plan.toLowerCase()] ?? 0;
+      filtered = filtered.filter(f => (PLAN_LEVEL[f.startsIn] ?? 0) <= targetLvl);
+    }
+
+    if (search) {
+      const q = search.toLowerCase();
+      filtered = filtered.filter(f =>
+        f.name.toLowerCase().includes(q) ||
+        f.description.toLowerCase().includes(q) ||
+        f.institutionBenefit.toLowerCase().includes(q) ||
+        f.id.toLowerCase().includes(q)
+      );
+    }
+
+    res.json({
+      success: true,
+      data: {
+        categories: CATEGORIES,
+        summary: {
+          total: FEATURE_REGISTRY.length,
+          live: FEATURE_REGISTRY.filter(f => f.status === 'live').length,
+          comingSoon: FEATURE_REGISTRY.filter(f => f.status === 'coming_soon').length,
+          starter: 33,
+          standard: 88,
+          premium: 141,
+          enterprise: 162
+        },
+        services: filtered
+      }
     });
   } catch (error) {
     next(error);
