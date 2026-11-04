@@ -176,10 +176,18 @@ exports.login = async (req, res, next) => {
         where: { id: user.college_id },
         select: {
           id: true, name: true, code: true, slug: true, status: true, logo: true,
-          subscription: true, onboarding_state: true, subscription_status: true, grace_until: true
+          subscription: true, onboarding_state: true, subscription_status: true, grace_until: true,
+          subStatus: true, tokenEpoch: true
         }
       });
       if (college) {
+        if (college.subStatus === 'SUSPENDED') {
+          return res.status(403).json({
+            success: false,
+            code: 'ACCOUNT_SUSPENDED',
+            message: 'This institution account is currently suspended.'
+          });
+        }
         if (college.status === 'onboarding' && user.role !== 'admin') {
           return res.status(403).json({ success: false, message: 'College setup is not finished yet.' });
         }
@@ -203,7 +211,7 @@ exports.login = async (req, res, next) => {
       }
     }
 
-    const token = generateToken(user.id, user.college_id || null, user.role);
+    const token = generateToken(user.id, user.college_id || null, user.role, college ? (college.tokenEpoch || 0) : 0);
 
     res.json({
       success: true,
