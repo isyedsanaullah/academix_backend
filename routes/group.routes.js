@@ -18,6 +18,22 @@ router.route('/:groupId/subjects/:id')
   .put(authorize('admin', 'registrar', 'principal'), updateGroupSubject)
   .delete(authorize('admin', 'registrar'), deleteGroupSubject);
 
+// Phase 8A: Seat Allocations & Fee Schedules (#29)
+const {
+  getSeatAllocation,
+  setSeatAllocation,
+  getFeeSchedule,
+  setFeeSchedule
+} = require('../controllers/groupSeat.controller');
+
+router.route('/:groupId/seat-allocation')
+  .get(authorize('admin', 'principal', 'registrar', 'teacher'), getSeatAllocation)
+  .put(authorize('admin', 'registrar'), setSeatAllocation);
+
+router.route('/:groupId/fee-schedule')
+  .get(authorize('admin', 'principal', 'registrar', 'accountant'), getFeeSchedule)
+  .put(authorize('admin', 'accountant'), setFeeSchedule);
+
 
 router.meta = {
   "exempt": "core",

@@ -72,6 +72,42 @@ router.get('/download-key', async (req, res, next) => {
 // All routes require auth + tenant context
 router.use(protect, tenantContext);
 
+// Phase 7A: Storage Quota & Upload Reservation Lifecycle
+router.post('/reserve-upload', async (req, res, next) => {
+  try {
+    const { reserveUploadSlot } = require('../services/storageQuotaService');
+    const collegeId = req.collegeId || req.user.college_id;
+    const userId = req.user.id;
+    const result = await reserveUploadSlot(collegeId, userId, req.body);
+    res.status(201).json({ success: true, ...result });
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, code: e.code, message: e.message });
+  }
+});
+
+router.post('/finalize-upload', async (req, res, next) => {
+  try {
+    const { finalizeUploadReservation } = require('../services/storageQuotaService');
+    const userId = req.user.id;
+    const { reservationId } = req.body;
+    const result = await finalizeUploadReservation(reservationId, userId);
+    res.json(result);
+  } catch (e) {
+    res.status(e.status || 500).json({ success: false, code: e.code, message: e.message });
+  }
+});
+
+router.get('/quota', async (req, res, next) => {
+  try {
+    const { getStorageQuotaOverview } = require('../services/storageQuotaService');
+    const collegeId = req.collegeId || req.user.college_id;
+    const overview = await getStorageQuotaOverview(collegeId);
+    res.json({ success: true, ...overview });
+  } catch (e) {
+    res.status(500).json({ success: false, message: e.message });
+  }
+});
+
 // Presigned upload flow (for larger files)
 router.post('/initiate', initiateUpload);
 router.post('/:id/finalize', finalizeUpload);

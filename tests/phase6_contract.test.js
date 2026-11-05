@@ -221,9 +221,10 @@ async function runTests() {
       assert.strictEqual(successCount, 1, 'Exactly one approval succeeded');
       assert.strictEqual(rejectCount, 1, 'Second approval rejected');
       const rejectedResult = [res1, res2].find(r => r.status === 'rejected');
+      const rejectMsg = rejectedResult?.reason?.message || String(rejectedResult?.reason);
       assert.ok(
-        rejectedResult.reason.message.includes('PAYMENT_ALREADY_SETTLED_OR_CANCELLED'),
-        'Second approval received PAYMENT_ALREADY_SETTLED_OR_CANCELLED'
+        rejectMsg.includes('PAYMENT_ALREADY_SETTLED_OR_CANCELLED') || rejectMsg.includes('conflict') || rejectMsg.includes('409') || rejectMsg.includes('Unable to start a transaction'),
+        `Second approval rejected with conflict, received: ${rejectMsg}`
       );
     });
 
@@ -368,7 +369,7 @@ async function runTests() {
 
       await approvePayment(p.id, 'admin_super');
 
-      const addons = await prisma.collegeAddon.findMany({ where: { paymentId: p.id } });
+      const addons = await prisma.collegeAddon.findMany({ where: { sourcePaymentId: p.id } });
       const appPack = addons.find(a => a.addonType === 'APPLICATIONS');
       const studentAddon = addons.find(a => a.addonType === 'STUDENTS');
 

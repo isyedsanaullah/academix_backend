@@ -7,6 +7,13 @@ const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
 const { getEntitlements } = require('../middleware/loadEntitlements');
 const mailService = require('../services/mailService');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const { STEP_UP_SECRET } = require('../middleware/stepUpAuth');
+const { processKnownDevice } = require('./twoFactor.controller');
+
+// In-memory rate limiting for step-up auth (5 failures -> 15 min lockout)
+const stepUpAttempts = new Map();
 
 // @desc    Register a new user
 
@@ -211,6 +218,73 @@ exports.login = async (req, res, next) => {
       }
     }
 
+    // Phase 9A: Two-Factor Authentication Check
+    if (user.totpEnabled) {
+      if (user.totpLockedUntil && user.totpLockedUntil > new Date()) {
+        const remainingMin = Math.ceil((user.totpLockedUntil.getTime() - Date.now()) / 60000);
+        return res.status(429).json({
+          success: false,
+          code: 'ACCOUNT_LOCKED_2FA',
+          message: `Account is temporarily locked due to too many failed 2FA attempts. Locked for ${remainingMin} more minutes.`
+        });
+      }
+
+      const preAuthToken = jwt.sign(
+        { userId: user.id, collegeId: user.college_id, role: user.role, scope: 'PREAUTH_2FA', jti: crypto.randomUUID() },
+        process.env.JWT_SECRET,
+        { expiresIn: '5m' }
+      );
+
+      return res.json({
+        success: true,
+        requires2FA: true,
+        preAuthToken,
+        message: 'Two-factor authentication required. Please enter your 6-digit authenticator code.'
+      });
+    }
+
+    // Phase 9A: Mandatory 2FA for Super Admin accounts
+    if (user.role === 'superAdmin' && !user.totpEnabled) {
+      const enrollToken = jwt.sign(
+        { userId: user.id, collegeId: null, role: user.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
+        process.env.JWT_SECRET,
+        { expiresIn: '15m' }
+      );
+
+      return res.json({
+        success: true,
+        requires2FAEnrollment: true,
+        enrollToken,
+        message: 'Two-factor authentication is mandatory for Super Admin accounts. Please complete setup before continuing.'
+      });
+    }
+
+    // Phase 9A: Enforced 2FA for College Admins after grace period
+    if (college && ['admin', 'principal'].includes(user.role) && !user.totpEnabled) {
+      const collegeSettings = (college.settings && typeof college.settings === 'object') ? college.settings : {};
+      if (collegeSettings.require2FAForAdmins) {
+        const graceDays = Number(collegeSettings['twofa.enforcementGraceDays']) || 7;
+        const colCreatedAt = college.createdAt ? new Date(college.createdAt).getTime() : 0;
+        if (Date.now() - colCreatedAt > graceDays * 86400000) {
+          const enrollToken = jwt.sign(
+            { userId: user.id, collegeId: user.college_id, role: user.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
+            process.env.JWT_SECRET,
+            { expiresIn: '15m' }
+          );
+
+          return res.json({
+            success: true,
+            requires2FAEnrollment: true,
+            enrollToken,
+            message: 'Two-factor authentication is enforced for administrators in this institution. Please complete setup.'
+          });
+        }
+      }
+    }
+
+    // Process Known Device tracking & alert
+    await processKnownDevice(req, res, user);
+
     const token = generateToken(user.id, user.college_id || null, user.role, college ? (college.tokenEpoch || 0) : 0);
 
     res.json({
@@ -322,6 +396,50 @@ exports.googleLogin = async (req, res, next) => {
         college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
     }
+
+    // Phase 9A: Two-Factor Authentication Check for Google sign-in
+    if (updatedUser.totpEnabled) {
+      if (updatedUser.totpLockedUntil && updatedUser.totpLockedUntil > new Date()) {
+        const remainingMin = Math.ceil((updatedUser.totpLockedUntil.getTime() - Date.now()) / 60000);
+        return res.status(429).json({
+          success: false,
+          code: 'ACCOUNT_LOCKED_2FA',
+          message: `Account is temporarily locked due to too many failed 2FA attempts. Locked for ${remainingMin} more minutes.`
+        });
+      }
+
+      const preAuthToken = jwt.sign(
+        { userId: updatedUser.id, collegeId: updatedUser.college_id, role: updatedUser.role, scope: 'PREAUTH_2FA', jti: crypto.randomUUID() },
+        process.env.JWT_SECRET,
+        { expiresIn: '5m' }
+      );
+
+      return res.json({
+        success: true,
+        requires2FA: true,
+        preAuthToken,
+        message: 'Two-factor authentication required. Please enter your 6-digit authenticator code.'
+      });
+    }
+
+    // Phase 9A: Mandatory 2FA for Super Admin accounts
+    if (updatedUser.role === 'superAdmin' && !updatedUser.totpEnabled) {
+      const enrollToken = jwt.sign(
+        { userId: updatedUser.id, collegeId: null, role: updatedUser.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
+        process.env.JWT_SECRET,
+        { expiresIn: '15m' }
+      );
+
+      return res.json({
+        success: true,
+        requires2FAEnrollment: true,
+        enrollToken,
+        message: 'Two-factor authentication is mandatory for Super Admin accounts. Please complete setup before continuing.'
+      });
+    }
+
+    // Process Known Device tracking & alert
+    await processKnownDevice(req, res, updatedUser);
 
     const token = generateToken(updatedUser.id, updatedUser.college_id || null, updatedUser.role);
 
@@ -651,3 +769,82 @@ exports.resendVerification = async (req, res, next) => {
     next(error);
   }
 };
+
+// @desc    Step-up authentication for destructive governance actions
+// @route   POST /api/auth/step-up
+// @access  Private (Elevated)
+exports.stepUp = async (req, res, next) => {
+  try {
+    const { password } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Authentication required' });
+    }
+
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'Password is required for step-up verification' });
+    }
+
+    // Rate-limiting check: 5 failed attempts -> 15 min lock
+    const attemptRecord = stepUpAttempts.get(userId) || { failures: 0, lockUntil: 0 };
+    const now = Date.now();
+    if (attemptRecord.lockUntil > now) {
+      const waitMinutes = Math.ceil((attemptRecord.lockUntil - now) / 60000);
+      return res.status(429).json({
+        success: false,
+        code: 'TOO_MANY_STEP_UP_ATTEMPTS',
+        message: `Too many failed step-up attempts. Locked for ${waitMinutes} more minutes.`
+      });
+    }
+
+    const prisma = getSystemClient();
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, password: true, role: true }
+    });
+
+    if (!user || !user.password) {
+      return res.status(401).json({ success: false, message: 'Invalid credentials or user cannot perform password step-up' });
+    }
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      attemptRecord.failures++;
+      if (attemptRecord.failures >= 5) {
+        attemptRecord.lockUntil = now + 15 * 60 * 1000;
+      }
+      stepUpAttempts.set(userId, attemptRecord);
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_CREDENTIALS',
+        message: 'Invalid password. Step-up elevation failed.'
+      });
+    }
+
+    // Reset failure counter on success
+    stepUpAttempts.delete(userId);
+
+    const jti = crypto.randomUUID();
+    const token = jwt.sign(
+      {
+        userId: user.id,
+        role: user.role,
+        actionClass: 'destructive',
+        jti
+      },
+      STEP_UP_SECRET,
+      { expiresIn: '5m' }
+    );
+
+    return res.json({
+      success: true,
+      message: 'Step-up authentication elevated successfully for 5 minutes',
+      stepUpToken: token,
+      expiresIn: 300
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+

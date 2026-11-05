@@ -304,7 +304,7 @@ async function approvePayment(paymentId, adminUserId, opts = {}) {
     });
 
     return { receiptNumber, verifiedAmount, paymentId };
-  });
+  }, { maxWait: 15000, timeout: 20000 });
 }
 
 // ---------------------------------------------------------------------------

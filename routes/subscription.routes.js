@@ -17,5 +17,12 @@ router.post('/renew', protect, tenantContext, subscriptionController.submitPayme
 router.get('/payment-history', protect, tenantContext, subscriptionController.getPaymentHistory);
 router.get('/history', protect, tenantContext, subscriptionController.getPaymentHistory);
 
+// Phase 10: N20 Message Credit Wallet & Consumption Ledger UI (Premium)
+const creditWalletController = require('../controllers/creditWallet.controller');
+const { subscriptionGate } = require('../middleware/subscriptionGate');
+
+router.get('/credits/wallet', protect, tenantContext, subscriptionGate('message-credit-wallet'), creditWalletController.getWallet);
+router.get('/credits/ledger', protect, tenantContext, subscriptionGate('message-credit-wallet'), creditWalletController.getLedger);
+
 module.exports = router;
 

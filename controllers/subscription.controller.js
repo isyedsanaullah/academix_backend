@@ -333,6 +333,14 @@ async function submitPaymentProof(req, res) {
           });
         }
 
+        if (catalogRow.isPurchasable === false) {
+          return res.status(422).json({
+            success: false,
+            code: 'ITEM_NOT_PURCHASABLE',
+            message: `Item '${item.addonType}' is currently not purchasable. Real drivers will be enabled when SMS/WhatsApp goes live.`
+          });
+        }
+
         const unitPrice = cycle === 'YEARLY' ? catalogRow.unitPriceYearlyPkr : catalogRow.unitPriceMonthlyPkr;
         const subtotal = unitPrice * item.quantity;
         expectedAmount += subtotal;
@@ -467,6 +475,14 @@ async function calculateTotal(req, res) {
             success: false,
             code: 'INVALID_ADDON_ITEM',
             message: `Add-on '${item.addonType}' is not available for plan '${resolvedPlanId}'.`
+          });
+        }
+
+        if (catalogRow.isPurchasable === false) {
+          return res.status(422).json({
+            success: false,
+            code: 'ITEM_NOT_PURCHASABLE',
+            message: `Item '${item.addonType}' is currently not purchasable. Real drivers will be enabled when SMS/WhatsApp goes live.`
           });
         }
 

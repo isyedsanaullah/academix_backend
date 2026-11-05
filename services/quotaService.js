@@ -40,10 +40,10 @@ function resolvePeriodKey(metric, annualQuotaCycleStart = null, date = new Date(
  * Resolves the numerical limit from effectiveLimits for a specific metric.
  */
 function resolveLimit(effectiveLimits, metric) {
-  if (metric === 'students') return effectiveLimits.maxStudents;
-  if (metric === 'staff') return effectiveLimits.maxStaff;
-  if (metric === 'admins') return effectiveLimits.maxAdmins;
-  if (metric === 'campuses') return effectiveLimits.maxCampuses;
+  if (metric === 'students' || metric === 'maxStudents') return effectiveLimits.maxStudents;
+  if (metric === 'staff' || metric === 'maxStaff') return effectiveLimits.maxStaff;
+  if (metric === 'admins' || metric === 'maxAdmins') return effectiveLimits.maxAdmins;
+  if (metric === 'campuses' || metric === 'maxCampuses') return effectiveLimits.maxCampuses;
   if (metric === 'storageBytes') return effectiveLimits.maxStorageBytes;
   if (metric === 'applications') return effectiveLimits.maxApplications;
   if (metric === 'aiQuizGenerations') return effectiveLimits.aiQuizGenerationsMonthly;
@@ -51,8 +51,9 @@ function resolveLimit(effectiveLimits, metric) {
   if (metric === 'documentOcr') return effectiveLimits.documentOcrMonthly;
   if (metric === 'noticeTranslation') return effectiveLimits.noticeTranslationMonthly;
   if (metric === 'askYourData') return effectiveLimits.askYourDataMonthly;
-  if (metric === 'exportsCsv') return effectiveLimits.exportsMonthly?.csv ?? 0;
-  if (metric === 'exportsPdf') return effectiveLimits.exportsMonthly?.pdf ?? 0;
+  if (metric === 'exportsCsv' || metric === 'exportsCsvMonthly') return effectiveLimits.exportsCsvMonthly ?? effectiveLimits.exportsMonthly?.csv ?? 0;
+  if (metric === 'exportsPdf' || metric === 'exportsPdfMonthly') return effectiveLimits.exportsPdfMonthly ?? effectiveLimits.exportsMonthly?.pdf ?? 0;
+  if (metric === 'exportMaxRows') return effectiveLimits.exportMaxRows ?? effectiveLimits.exportsMonthly?.maxCsvRows ?? 1000;
   if (metric === 'apiCalls') return effectiveLimits.apiCallsMonthly;
   if (metric === 'backupZip') return effectiveLimits.backupZipMonthly;
   if (metric.startsWith('tutorChat:')) return effectiveLimits.tutorDailyPerStudent;
@@ -87,8 +88,8 @@ async function checkQuota(collegeId, metric, requestedAmount = 1, dbClient = nul
   });
 
   const current = usageRecord ? Number(usageRecord.value) : 0;
-  const isExceeded = (current + requestedAmount) > limit;
-  const remaining = Math.max(0, limit - current);
+  const isExceeded = limit === -1 ? false : (current + requestedAmount) > limit;
+  const remaining = limit === -1 ? Infinity : Math.max(0, limit - current);
 
   return {
     allowed: !isExceeded,
@@ -135,7 +136,7 @@ async function withQuota(collegeId, metric, count, callback) {
 
     const current = usage ? Number(usage.value) : 0;
 
-    if (current + count > limit) {
+    if (limit !== -1 && current + count > limit) {
       throw new QuotaExceededError(
         `Institutional quota for metric '${metric}' exceeded. Current: ${current}, Requested: ${count}, Limit: ${limit}.`,
         {
@@ -205,12 +206,28 @@ async function recordUsage(collegeId, metric, delta, dbClient = null) {
   });
 }
 
+/**
+ * Refunds consumed monthly quota atomically, setting value = GREATEST(value - n, 0)
+ */
+async function refundQuota(collegeId, metric, periodKey, n = 1, dbClient = null) {
+  const prisma = dbClient || getSystemClient();
+  const num = BigInt(n);
+  const rows = await prisma.$queryRaw`
+    UPDATE "CollegeUsage"
+    SET "value" = GREATEST("value" - ${num}, 0), "updatedAt" = NOW()
+    WHERE "college_id" = ${collegeId} AND "metric" = ${metric} AND "period" = ${periodKey}
+    RETURNING "value";
+  `;
+  return rows[0] ? Number(rows[0].value) : 0;
+}
+
 module.exports = {
   QuotaExceededError,
   resolvePeriodKey,
   resolveLimit,
   checkQuota,
   withQuota,
-  recordUsage
+  recordUsage,
+  refundQuota
 };
 

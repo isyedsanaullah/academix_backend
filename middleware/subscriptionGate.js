@@ -33,11 +33,22 @@ function subscriptionGate(requiredFeatureKey = null) {
       const entitlements = await getEntitlements(collegeId);
       req.entitlements = entitlements;
 
+      // Check Suspended state - blocks everything
+      if (entitlements.subStatus === 'SUSPENDED') {
+        return res.status(403).json({
+          success: false,
+          code: 'ACCOUNT_SUSPENDED',
+          message: 'Institution subscription is currently suspended.'
+        });
+      }
+
       const enforceStrict = process.env.ENFORCE_SUBSCRIPTION_GATES === 'true';
 
       // 4. Check View-Only (Read-Only) Lock on mutating requests
       const isMutatingMethod = !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
-      if (entitlements.isReadOnly && isMutatingMethod) {
+      const isWhitelistedInReadOnly = (req.baseUrl && req.baseUrl.includes('exports')) || (req.originalUrl && req.originalUrl.includes('/api/exports'));
+
+      if (entitlements.isReadOnly && isMutatingMethod && !isWhitelistedInReadOnly) {
         if (enforceStrict) {
           return res.status(403).json({
             success: false,
@@ -84,7 +95,6 @@ function subscriptionGate(requiredFeatureKey = null) {
   };
 }
 
-module.exports = {
-  subscriptionGate
-};
+module.exports = subscriptionGate;
+module.exports.subscriptionGate = subscriptionGate;
 

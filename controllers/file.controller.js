@@ -607,7 +607,15 @@ exports.deleteFile = async (req, res, next) => {
       },
     });
 
-    res.json({ success: true, message: 'File deleted successfully.' });
+    // Reclaim storage quota immediately upon deletion
+    if (storedFile.sizeBytes > 0) {
+      await tenantDb.collegeUsage.updateMany({
+        where: { college_id: collegeId, metric: 'storageBytes', period: 'total' },
+        data: { value: { decrement: BigInt(storedFile.sizeBytes) } }
+      }).catch(e => console.warn('[deleteFile] Storage quota decrement warning:', e.message));
+    }
+
+    res.json({ success: true, message: 'File deleted successfully and storage quota reclaimed.' });
   } catch (error) {
     next(error);
   }

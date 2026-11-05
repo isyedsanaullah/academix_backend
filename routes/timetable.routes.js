@@ -47,6 +47,23 @@ router.route('/')
   .get(authorize('admin', 'registrar', 'principal', 'teacher', 'student'), getTimetables)
   .post(authorize('admin', 'registrar'), createTimetable);
 
+// Phase 7C: Timetable Profile Isolation & Validation
+const {
+  createProfile,
+  listProfiles,
+  activateProfile,
+  createEntry,
+  swapSlots,
+  exportTimetablePDF
+} = require('../controllers/timetableProfile.controller');
+
+router.post('/profiles', authorize('admin', 'principal', 'registrar'), createProfile);
+router.get('/profiles', authorize('admin', 'principal', 'registrar', 'teacher', 'student'), listProfiles);
+router.post('/profiles/:id/activate', authorize('admin', 'principal'), activateProfile);
+router.post('/entries', authorize('admin', 'principal', 'registrar'), createEntry);
+router.post('/swap', authorize('admin', 'principal', 'registrar'), swapSlots);
+router.get('/profiles/:id/export-pdf', authorize('admin', 'principal', 'registrar', 'teacher', 'student'), exportTimetablePDF);
+
 router.route('/:id')
   .put(authorize('admin', 'registrar'), updateTimetable)
   .delete(authorize('admin', 'registrar'), deleteTimetable);

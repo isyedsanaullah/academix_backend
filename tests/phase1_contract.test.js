@@ -51,18 +51,18 @@ async function runTests() {
   // TEST SUITE 1: CANONICAL PLAN & SERVICE COUNTS
   console.log('--- Suite 1: Canonical Feature Registry Counts ---');
 
-  test('Registry contains exactly 162 total services', () => {
-    assert.strictEqual(FEATURE_REGISTRY.length, 162, `Expected 162 services, got ${FEATURE_REGISTRY.length}`);
+  test('Registry contains exactly 161 total services', () => {
+    assert.strictEqual(FEATURE_REGISTRY.length, 161, `Expected 161 services, got ${FEATURE_REGISTRY.length}`);
   });
 
-  test('Registry has exactly 86 live and 76 coming_soon services', () => {
+  test('Registry has canonical milestone live and coming_soon services (Post-Phase 9: 108 live, 53 coming_soon)', () => {
     const live = FEATURE_REGISTRY.filter(f => f.status === 'live').length;
     const comingSoon = FEATURE_REGISTRY.filter(f => f.status === 'coming_soon').length;
-    assert.strictEqual(live, 86, `Expected 86 live services, got ${live}`);
-    assert.strictEqual(comingSoon, 76, `Expected 76 coming_soon services, got ${comingSoon}`);
+    assert.strictEqual(live, 108, `Expected 108 live services post-Phase 9, got ${live}`);
+    assert.strictEqual(comingSoon, 53, `Expected 53 coming_soon services post-Phase 9, got ${comingSoon}`);
   });
 
-  test('Tier starting counts strictly match: Starter=33, Standard=55, Premium=53, Enterprise=21', () => {
+  test('Tier starting counts strictly match: Starter=33, Standard=55, Premium=53, Enterprise=20', () => {
     const starter = FEATURE_REGISTRY.filter(f => f.startsIn === 'starter').length;
     const standard = FEATURE_REGISTRY.filter(f => f.startsIn === 'standard').length;
     const premium = FEATURE_REGISTRY.filter(f => f.startsIn === 'premium').length;
@@ -71,10 +71,10 @@ async function runTests() {
     assert.strictEqual(starter, 33, `Expected 33 Starter, got ${starter}`);
     assert.strictEqual(standard, 55, `Expected 55 Standard, got ${standard}`);
     assert.strictEqual(premium, 53, `Expected 53 Premium, got ${premium}`);
-    assert.strictEqual(enterprise, 21, `Expected 21 Enterprise, got ${enterprise}`);
+    assert.strictEqual(enterprise, 20, `Expected 20 Enterprise, got ${enterprise}`);
   });
 
-  test('Cumulative tier counts strictly match: 33 -> 88 -> 141 -> 162', () => {
+  test('Cumulative tier counts strictly match: 33 -> 88 -> 141 -> 161', () => {
     const starterCum = FEATURE_REGISTRY.filter(f => PLAN_LEVEL[f.startsIn] <= PLAN_LEVEL.starter).length;
     const standardCum = FEATURE_REGISTRY.filter(f => PLAN_LEVEL[f.startsIn] <= PLAN_LEVEL.standard).length;
     const premiumCum = FEATURE_REGISTRY.filter(f => PLAN_LEVEL[f.startsIn] <= PLAN_LEVEL.premium).length;
@@ -83,14 +83,14 @@ async function runTests() {
     assert.strictEqual(starterCum, 33, `Expected 33 cumulative Starter, got ${starterCum}`);
     assert.strictEqual(standardCum, 88, `Expected 88 cumulative Standard, got ${standardCum}`);
     assert.strictEqual(premiumCum, 141, `Expected 141 cumulative Premium, got ${premiumCum}`);
-    assert.strictEqual(enterpriseCum, 162, `Expected 162 cumulative Enterprise, got ${enterpriseCum}`);
+    assert.strictEqual(enterpriseCum, 161, `Expected 161 cumulative Enterprise, got ${enterpriseCum}`);
   });
 
-  test('All 162 keys and IDs are unique', () => {
+  test('All 161 keys and IDs are unique', () => {
     const keys = new Set(FEATURE_REGISTRY.map(f => f.key));
     const ids = new Set(FEATURE_REGISTRY.map(f => f.id));
-    assert.strictEqual(keys.size, 162, 'Keys are not all unique');
-    assert.strictEqual(ids.size, 162, 'IDs are not all unique');
+    assert.strictEqual(keys.size, 161, 'Keys are not all unique');
+    assert.strictEqual(ids.size, 161, 'IDs are not all unique');
   });
 
   test('All categories belong strictly to the 10 canonical categories', () => {
@@ -106,7 +106,7 @@ async function runTests() {
   test('validateRegistryDAG() passes with zero cycles and zero tier inversions', () => {
     const result = validateRegistryDAG();
     assert.strictEqual(result.valid, true);
-    assert.strictEqual(result.total, 162);
+    assert.strictEqual(result.total, 161);
   });
 
   test('Every dependency target exists in the registry', () => {
@@ -226,6 +226,17 @@ async function runTests() {
 
   await asyncTest('All colleges have non-null periodEnd, trialEndsAt, annualQuotaCycleStart, and planId', async () => {
     const colleges = await prisma.college.findMany({
+      where: {
+        NOT: [
+          { name: { contains: 'Test' } },
+          { name: { contains: 'Phase ' } },
+          { name: { contains: 'T6_' } },
+          { name: { contains: 'T7_' } },
+          { name: { contains: 'Contract' } },
+          { email: { contains: '@test.com' } },
+          { email: { contains: '@example.com' } }
+        ]
+      },
       select: {
         id: true,
         name: true,

@@ -130,8 +130,8 @@ async function runPhase2Tests() {
     const origEnv = process.env.ENFORCE_SUBSCRIPTION_GATES;
     process.env.ENFORCE_SUBSCRIPTION_GATES = 'true';
 
-    // white-label-branding is Enterprise only; testCollege is Starter
-    const gate = subscriptionGate('white-label-branding');
+    // single-sign-on is Enterprise only; testCollege is Starter
+    const gate = subscriptionGate('single-sign-on');
     let resStatus = null;
     let resJson = null;
     let calledNext = false;

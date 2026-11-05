@@ -67,6 +67,7 @@ model AIUsageLog {
 }
 
 model Announcement {
+  dispatchedAt      DateTime?
   id            String    @id @default(uuid())
   college_id    String
   title         String
@@ -354,6 +355,7 @@ model ChatHistory {
 model Class {
   id         String   @id @default(uuid())
   college_id String
+  campus_id  String?
   session_id String
   name       String // FSC Part 1, FSC Part 2
   groups     String[]
@@ -362,23 +364,165 @@ model Class {
   updatedAt  DateTime @updatedAt
 
   @@unique([college_id, session_id, name])
+  @@index([college_id, campus_id])
 }
 
 model Group {
-  id         String   @id @default(uuid())
-  college_id String
-  class_id   String // References Class.id (Part)
-  name       String // e.g. "Computer Science", "Pre-Medical"
-  seats      Int?
-  feeNote    String?
-  isActive   Boolean? @default(true)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id              String                @id @default(uuid())
+  college_id      String
+  class_id        String // References Class.id (Part)
+  name            String // e.g. "Computer Science", "Pre-Medical"
+  seats           Int? // @deprecated Phase 8A: use GroupSeatAllocation
+  feeNote         String?
+  isActive        Boolean?              @default(true)
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  seatAllocations GroupSeatAllocation[]
+  feeSchedules    GroupFeeSchedule[]
 
   @@unique([college_id, class_id, name])
 }
 
+model GroupSeatAllocation {
+  id             String   @id @default(uuid())
+  college_id     String
+  campus_id      String?  // Nullable; Phase 10 campus isolation
+  group_id       String
+  session_id     String
+  maxSeats       Int
+  allocatedSeats Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  group          Group    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  session        Session  @relation(fields: [session_id], references: [id], onDelete: Cascade)
+
+  @@unique([college_id, group_id, session_id])
+  @@index([college_id, session_id])
+}
+
+model GroupFeeSchedule {
+  id              String   @id @default(uuid())
+  college_id      String
+  campus_id       String?  // Nullable; Phase 10 campus isolation
+  group_id        String
+  session_id      String
+  tuitionFeePkr   Decimal  @db.Decimal(10, 2)
+  admissionFeePkr Decimal  @db.Decimal(10, 2)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  group           Group    @relation(fields: [group_id], references: [id], onDelete: Cascade)
+  session         Session  @relation(fields: [session_id], references: [id], onDelete: Cascade)
+
+  @@unique([college_id, group_id, session_id])
+  @@index([college_id, session_id])
+}
+
+model ClassDiaryEntry {
+  id           String                 @id @default(uuid())
+  college_id   String
+  campus_id    String? // Nullable; Phase 10 campus isolation
+  section_id   String
+  subject_id   String
+  teacher_id   String
+  entryDate    DateTime               @db.Date
+  periodNumber Int
+  topicCovered String
+  homework     String?
+  remarks      String?
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+
+  attachments  ClassDiaryAttachment[]
+
+  @@unique([college_id, section_id, subject_id, entryDate, periodNumber])
+  @@index([college_id, section_id, entryDate])
+  @@index([college_id, teacher_id, entryDate])
+}
+
+model ClassDiaryAttachment {
+  id             String          @id @default(uuid())
+  diary_entry_id String
+  college_id     String
+  storedFileId   String
+  fileName       String
+  fileUrl        String
+  storageBytes   BigInt          @default(0)
+  createdAt      DateTime        @default(now())
+
+  diaryEntry     ClassDiaryEntry @relation(fields: [diary_entry_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id, diary_entry_id])
+}
+
+model AcademicCalendarEvent {
+  id             String   @id @default(uuid())
+  college_id     String
+  campus_id      String? // Nullable; Phase 10 campus isolation
+  session_id     String
+  title          String
+  description    String?
+  eventType      String   @default("GENERAL") // GENERAL, HOLIDAY, EXAM, EVENT, TERM_START, TERM_END, SPORTS
+  startDate      DateTime @db.Date
+  endDate        DateTime @db.Date
+  isWorkingDay   Boolean  @default(false)
+  targetAudience String   @default("ALL") // ALL, STUDENTS, STAFF, PARENTS
+  isPublic       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([college_id, session_id, startDate, endDate])
+}
+
+model BulkImportJob {
+  id            String          @id @default(uuid())
+  college_id    String
+  campus_id     String?         // Nullable; Phase 10 campus isolation
+  importType    String          // 'students', 'staff', 'fees', 'marks'
+  status        String          @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED, PARTIAL_SUCCESS
+  claimedBy     String?
+  heartbeatAt   DateTime?
+  totalRows     Int             @default(0)
+  rowsProcessed Int             @default(0)
+  rowsSuccess   Int             @default(0)
+  rowsFailed    Int             @default(0)
+  errorCsvUrl   String?
+  sourceFileKey String?
+  createdById   String
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+
+  rows          BulkImportRow[]
+
+  @@index([college_id, status])
+  @@index([status, heartbeatAt])
+}
+
+model BulkImportRow {
+  id           String        @id @default(uuid())
+  job_id       String
+  rowNumber    Int
+  payloadJson  Json
+  status       String        @default("PENDING") // PENDING, SUCCESS, FAILED
+  errorMessage String?
+  createdAt    DateTime      @default(now())
+
+  job          BulkImportJob @relation(fields: [job_id], references: [id], onDelete: Cascade)
+
+  @@index([job_id, status])
+}
+
 model College {
+  uploadReservations        UploadReservation[]
+  timetableProfiles         TimetableProfile[]
+  canteenItems              CanteenItem[]
+  cashierShifts             CashierShift[]
+  canteenOrders             CanteenOrder[]
+  cashDrawerTransactions    CashDrawerTransaction[]
+  mealAccounts              StudentMealAccount[]
+  mealAccountTransactions   MealAccountTransaction[]
   id               String    @id @default(uuid())
   name             String
   code             String    @unique
@@ -442,6 +586,9 @@ model College {
   planVersion              PlanVersion? @relation(fields: [planVersionId], references: [id])
   quotaOverrides           CollegeQuotaOverride[]
   entitlementAudits        CollegeEntitlementAudit[]
+
+  // Phase 10: Infrastructure, Multi-Campus & Compliance
+  ipAllowlistMode          String?  @default("OFF") // OFF | LOG_ONLY | ENFORCE
 
   @@index([status])
   @@index([subscription(path: "status")])
@@ -1101,6 +1248,7 @@ model Result {
 model Section {
   id           String   @id @default(uuid())
   college_id   String
+  campus_id    String?
   session_id   String
   class_id     String
   group_id     String? // References Group.id
@@ -1114,6 +1262,7 @@ model Section {
 
   @@unique([college_id, session_id, code])
   @@unique([college_id, session_id, name])
+  @@index([college_id, campus_id])
 }
 
 model Session {
@@ -1128,6 +1277,9 @@ model Session {
   createdBy  String?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
+
+  seatAllocations   GroupSeatAllocation[]
+  groupFeeSchedules GroupFeeSchedule[]
 
   @@unique([college_id, name])
   @@index([college_id, isCurrent])
@@ -1171,6 +1323,7 @@ model Student {
   application_id     String?   // Application.id it was enrolled from
   quota              String?   // Quota code e.g. "open_merit", "sports"
   candidateType      String?   @default("regular") // regular, private, improvement
+  importJobId        String?
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
@@ -1178,6 +1331,7 @@ model Student {
   @@index([college_id, session_id, class, section])
   @@index([college_id, status])
   @@index([college_id, group])
+  @@index([importJobId])
 }
 
 model StudentFee {
@@ -1334,10 +1488,19 @@ model User {
   qrCode                  String?   @default("")
   isActive                Boolean?  @default(true)
   lastLogin               DateTime?
+  importJobId             String?
+  totpSecretEnc           String?
+  totpEnabled             Boolean   @default(false)
+  totpLastStep            BigInt?
+  totpFailedAttempts      Int       @default(0)
+  totpLockedUntil         DateTime?
+  totpBackupCodes         Json?
+  twofaEnrolledAt         DateTime?
   createdAt               DateTime  @default(now())
   updatedAt               DateTime  @updatedAt
 
   @@index([college_id, role])
+  @@index([importJobId])
 }
 
 model VisitorLog {
@@ -1487,12 +1650,14 @@ model CollegeEntitlementAudit {
   featureKey      String?
   beforeStateJson Json?    // migrated from previousVal String? via raw SQL
   afterStateJson  Json?    // migrated from newVal String? via raw SQL
+  previousVal     String?  // preserved for backwards compatibility
+  newVal          String?  // preserved for backwards compatibility
   reason          String?
   paymentId       String?
   ipAddress       String?
   createdAt       DateTime @default(now())
 
-  // onDelete: Restrict � block college hard-delete if audit rows exist; use College.deletedAt soft-delete
+  // onDelete: Restrict � block college hard-delete if audit rows exist; use College.deletedAt soft-delete
   college         College  @relation(fields: [college_id], references: [id], onDelete: Restrict)
 
   // Immutability enforced by DB trigger (prevent_audit_mutation) applied in raw SQL migration
@@ -2132,6 +2297,7 @@ model AddonCatalog {
   unitPriceMonthlyPkr Int
   unitPriceYearlyPkr  Int
   isAvailable         Boolean  @default(true)
+  isPurchasable       Boolean  @default(true)
   maxCapPercentOfBase Int?
   maxUnitsStatic      Int?
   createdAt           DateTime @default(now())
@@ -2183,7 +2349,7 @@ model CollegeSubscriptionPayment {
 
   college   College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
 
-  // NOTE: @@unique([paymentMethod, transactionId]) removed � replaced by partial unique index
+  // NOTE: @@unique([paymentMethod, transactionId]) removed � replaced by partial unique index
   // applied as raw SQL migration (see migration script) to exclude REJECTED and CANCELLED rows.
   // Remove the @@unique from here so prisma migrate does not recreate it.
   @@index([college_id, status])
@@ -2279,34 +2445,838 @@ model ReceiptCounter {
 
 model OutboxEvent {
   id            String    @id @default(uuid())
+  college_id    String?
   eventType     String    // RECEIPT_EMAIL, IN_APP_NOTIFICATION, ENTITLEMENT_CHANGED, ANNOUNCEMENT_FANOUT
   payload       Json
-  status        String    @default("PENDING") // PENDING, PROCESSING, DONE, FAILED
+  status        String    @default("PENDING") // PENDING, PROCESSING, DONE, FAILED, DEAD_LETTER
   attempts      Int       @default(0)
+  retryCount    Int       @default(0)
   nextAttemptAt DateTime  @default(now())
   lastError     String?
   processedAt   DateTime?
+  failedAt      DateTime?
   updatedAt     DateTime  @updatedAt
   createdAt     DateTime  @default(now())
 
   @@index([status, nextAttemptAt])
+  @@index([college_id])
 }
 
 model SubscriptionReminderLog {
-  id         String   @id @default(uuid())
-  college_id String
-  eventType  String   // RENEWAL_30D, RENEWAL_14D, RENEWAL_7D, RENEWAL_1D, TRIAL_3D, TRIAL_1D, GRANDFATHER_90D, GRANDFATHER_60D, GRANDFATHER_30D, GRANDFATHER_14D, EXPIRY_TRANSITION
-  sentDate   DateTime @db.Date // Calendar date YYYY-MM-DD in PKT — unique guard against same-day re-send
-  createdAt  DateTime @default(now())
+  id            String   @id @default(uuid())
+  college_id    String
+  eventType     String   // RENEWAL_30D, RENEWAL_14D, RENEWAL_7D, RENEWAL_1D, TRIAL_3D, TRIAL_1D, GRANDFATHER_90D, GRANDFATHER_60D, GRANDFATHER_30D, GRANDFATHER_14D, EXPIRY_TRANSITION
+  sentDate      DateTime @db.Date // Calendar date YYYY-MM-DD in PKT
+  periodEndDate DateTime @db.Date // Period end date for renewal / grandfather deadline for GF / trial end
+  createdAt     DateTime @default(now())
 
-  @@unique([college_id, eventType, sentDate])
+  @@unique([college_id, eventType, periodEndDate])
   @@index([college_id])
 }
 
 model UsedStepUpToken {
   jti       String   @id
+  kind      String   @default("stepup") // 'stepup', 'preauth_2fa'
   usedAt    DateTime @default(now())
   expiresAt DateTime
 
   @@index([expiresAt])
 }
+
+// =============================================================================
+// PHASE 7: NEW SERVICES & CORE INFRASTRUCTURE
+// =============================================================================
+
+// 7A: File Vault & Storage Quotas
+model UploadReservation {
+  id                String   @id @default(uuid())
+  college_id        String
+  category          String   @default("general")
+  originalFilename  String
+  declaredSizeBytes BigInt
+  storageKey        String   @unique
+  expiresAt         DateTime
+  status            String   @default("PENDING") // PENDING, FINALIZED, ABANDONED
+  createdAt         DateTime @default(now())
+
+  college           College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id, status, expiresAt])
+}
+
+// 7B: Circulars & Push Delivery
+model CircularReadReceipt {
+  id         String   @id @default(uuid())
+  circularId String
+  userId     String
+  readAt     DateTime @default(now())
+  college_id String
+
+  @@unique([circularId, userId])
+  @@index([college_id, circularId])
+}
+
+// 7C: Timetable Profile Isolation
+model TimetableProfile {
+  id         String   @id @default(uuid())
+  college_id String
+  name       String
+  type       String   @default("STANDARD") // STANDARD, RAMADAN, EXAM
+  isActive   Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  periods    TimetablePeriod[]
+  entries    TimetableEntry[]
+
+  college    College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+  @@index([college_id, type, isActive])
+}
+
+model TimetablePeriod {
+  id           String   @id @default(uuid())
+  profile_id   String
+  periodNumber Int
+  startTime    String   // HH:MM
+  endTime      String   // HH:MM
+  isBreak      Boolean  @default(false)
+
+  profile      TimetableProfile @relation(fields: [profile_id], references: [id], onDelete: Cascade)
+  @@unique([profile_id, periodNumber])
+}
+
+model TimetableEntry {
+  id         String   @id @default(uuid())
+  college_id String
+  profile_id String
+  dayOfWeek  Int      // 1=Mon .. 7=Sun
+  periodNumber Int
+  subjectId  String
+  teacherId  String
+  roomId     String?
+  batchKey   String   @default("ALL") // ALL or specific batch
+
+  profile    TimetableProfile @relation(fields: [profile_id], references: [id], onDelete: Cascade)
+  sections   TimetableEntrySection[]
+
+  @@index([college_id, profile_id, dayOfWeek, periodNumber])
+  @@index([college_id, teacherId, dayOfWeek, periodNumber])
+}
+
+model TimetableEntrySection {
+  id           String   @id @default(uuid())
+  entryId      String
+  college_id   String   // denormalized
+  profile_id   String   // denormalized
+  section_id   String
+  dayOfWeek    Int      // denormalized
+  periodNumber Int      // denormalized
+
+  entry        TimetableEntry @relation(fields: [entryId], references: [id], onDelete: Cascade)
+  @@unique([college_id, profile_id, section_id, dayOfWeek, periodNumber])
+  @@index([entryId])
+}
+
+// 7D: Canteen POS & Sales Ledger
+model CanteenItem {
+  id              String   @id @default(uuid())
+  college_id      String
+  name            String
+  barcode         String?
+  category        String   @default("general")
+  sellingPricePkr Int
+  costPricePkr    Int
+  stockQuantity   Int      @default(0)
+  lowStockAlert   Int      @default(10)
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  college         College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+  orderItems      CanteenOrderItem[]
+
+  @@index([college_id, isActive])
+}
+
+model CashierShift {
+  id                     String    @id @default(uuid())
+  college_id             String
+  cashierId              String
+  openedAt               DateTime  @default(now())
+  closedAt               DateTime?
+  openingCashPkr         Int       @default(0)
+  declaredClosingCashPkr Int?
+  expectedClosingCashPkr Int?
+  systemCashSalesPkr     Int?
+  systemCashTopupsPkr    Int?
+  systemCashRefundsPkr   Int?
+  discrepancyPkr         Int?
+  status                 String    @default("OPEN") // OPEN, CLOSED
+  notes                  String?
+  createdAt              DateTime  @default(now())
+
+  college                College   @relation(fields: [college_id], references: [id], onDelete: Cascade)
+  orders                 CanteenOrder[]
+  cashDrawerTransactions CashDrawerTransaction[]
+
+  @@index([college_id, cashierId, openedAt(sort: Desc)])
+}
+
+model CanteenOrder {
+  id            String   @id @default(uuid())
+  college_id    String
+  clientOrderId String   // Client UUID idempotency
+  orderNumber   String
+  student_id    String?
+  customerType  String   // STUDENT, STAFF, WALK_IN
+  paymentMethod String   // CASH, WALLET
+  status        String   @default("COMPLETED") // COMPLETED, VOIDED
+  subtotalPkr   Int
+  discountPkr   Int      @default(0)
+  totalPkr      Int
+  cashTendered  Int?
+  changeGiven   Int?
+  cashierId     String
+  shiftId       String?
+  voidShiftId   String?
+  voidedAt      DateTime?
+  createdAt     DateTime @default(now())
+
+  college       College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+  shift         CashierShift? @relation(fields: [shiftId], references: [id], onDelete: SetNull)
+  items         CanteenOrderItem[]
+
+  @@unique([college_id, clientOrderId])
+  @@index([college_id, createdAt])
+  @@index([shiftId])
+}
+
+model CanteenOrderItem {
+  id           String @id @default(uuid())
+  order_id     String
+  item_id      String
+  quantity     Int
+  unitPricePkr Int
+  costPricePkr Int
+  subtotalPkr  Int
+
+  order        CanteenOrder @relation(fields: [order_id], references: [id], onDelete: Cascade)
+  item         CanteenItem  @relation(fields: [item_id], references: [id], onDelete: Restrict)
+
+  @@index([order_id])
+  @@index([item_id])
+}
+
+model CashDrawerTransaction {
+  id         String   @id @default(uuid())
+  college_id String
+  shiftId    String
+  cashierId  String
+  type       String   // SALE, TOPUP, VOID_REFUND, FLOAT_ADJUST
+  amountPkr  Int      // Positive = inflow, negative = disbursement
+  order_id   String?
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  college    College      @relation(fields: [college_id], references: [id], onDelete: Cascade)
+  shift      CashierShift @relation(fields: [shiftId], references: [id], onDelete: Restrict)
+
+  @@index([college_id, shiftId, createdAt])
+}
+
+model StudentMealAccount {
+  id                    String   @id @default(uuid())
+  college_id            String
+  student_id            String   @unique
+  balancePkr            Int      @default(0)
+  dailySpendingLimitPkr Int      @default(1000)
+  status                String   @default("ACTIVE")
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+
+  college               College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id, student_id])
+}
+
+model MealAccountTransaction {
+  id              String   @id @default(uuid())
+  college_id      String
+  student_id      String
+  type            String   // PURCHASE, TOPUP, REFUND
+  amountPkr       Int
+  balanceAfterPkr Int
+  order_id        String?
+  cashierId       String
+  notes           String?
+  createdAt       DateTime @default(now())
+
+  college         College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
+
+  @@index([college_id, student_id, createdAt])
+}
+
+model StaffAttendance {
+  id           String    @id @default(uuid())
+  college_id   String
+  campus_id    String?   // Pre-wired for Phase 10 multi-campus isolation
+  userId       String
+  date         DateTime  @db.Date
+  checkInTime  DateTime?
+  checkOutTime DateTime?
+  status       String    // PRESENT | LATE | HALF_DAY | ABSENT | DEFERRED_PROCESSING (ON_LEAVE is derived live)
+  minutesLate  Int       @default(0)
+  source       String    // MANUAL | BIOMETRIC | GATE_QR | SYSTEM
+  markedById   String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([college_id, userId, date])
+  @@index([college_id, date(sort: Desc)])
+}
+
+model StaffLeave {
+  id           String    @id @default(uuid())
+  college_id   String
+  campus_id    String?   // Pre-wired for Phase 10 multi-campus isolation
+  user_id      String
+  leaveType    String
+  startDate    DateTime  @db.Date
+  endDate      DateTime  @db.Date
+  status       String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reason       String?
+  approvedById String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([college_id, user_id, startDate, endDate])
+}
+
+model BiometricDevice {
+  id             String    @id @default(uuid())
+  college_id     String
+  campus_id      String?   // Pre-wired for Phase 10 multi-campus isolation
+  serialNumber   String    @unique          // GLOBAL unique
+  deviceName     String
+  location       String?
+  status         String    @default("ACTIVE") // ACTIVE | DISABLED
+  pushSecretHash String    // SHA-256 hash of device bearer secret
+  createdAt      DateTime  @default(now())
+  lastSeenAt     DateTime?
+
+  @@index([college_id, status])
+}
+
+model BiometricIdentityMap {
+  id           String  @id @default(uuid())
+  college_id   String
+  campus_id    String? // Pre-wired for Phase 10 multi-campus isolation
+  deviceUserId String
+  subjectType  String  // STUDENT | STAFF
+  subjectId    String
+
+  @@unique([college_id, deviceUserId])
+  @@index([college_id, subjectType, subjectId])
+}
+
+model BiometricPunchLog {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?  // Pre-wired for Phase 10 multi-campus isolation
+  deviceId     String
+  deviceUserId String
+  punchTime    DateTime // UTC
+  processed    Boolean  @default(false)
+  createdAt    DateTime @default(now())
+
+  @@unique([college_id, deviceId, deviceUserId, punchTime])
+  @@index([college_id, processed, punchTime])
+}
+
+model UnmappedBiometricPunch {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?  // Pre-wired for Phase 10 multi-campus isolation
+  deviceId     String
+  deviceUserId String
+  punchTime    DateTime
+  resolvedAt   DateTime?
+
+  @@index([college_id, resolvedAt, punchTime])
+}
+
+model GuardianNotification {
+  id         String    @id @default(uuid())
+  college_id String
+  campus_id  String?   // Pre-wired for Phase 10 multi-campus isolation
+  student_id String
+  kind       String    // ABSENCE | DIARY | CIRCULAR | SHORTAGE | FEE | GENERAL
+  title      String
+  body       String
+  refType    String?
+  refId      String?
+  readAt     DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([college_id, student_id, createdAt(sort: Desc)])
+  @@index([college_id, student_id, readAt])
+}
+
+model GuardianSession {
+  id             String    @id @default(uuid())
+  college_id     String
+  campus_id      String?   // Pre-wired for Phase 10 multi-campus isolation
+  studentId      String
+  pinHash        String    // bcrypt
+  isActive       Boolean   @default(true)
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  lastLoginAt    DateTime?
+  pinIssuedAt    DateTime  @default(now())
+  pinResetBy     String?
+
+  @@unique([college_id, studentId])
+}
+
+model GuardianToken {
+  id          String    @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  sessionId   String
+  tokenHash   String    @unique
+  tokenEpoch  Int       @default(0)
+  expiresAt   DateTime
+  revokedAt   DateTime?
+
+  @@index([sessionId])
+}
+
+model GuardianLoginAttempt {
+  id         String   @id @default(uuid())
+  college_id String
+  campus_id  String?
+  ipHash     String
+  success    Boolean
+  createdAt  DateTime @default(now())
+
+  @@index([college_id, ipHash, createdAt])
+}
+
+model AttendanceShortageNotice {
+  id                String    @id @default(uuid())
+  college_id        String
+  campus_id         String?   // Pre-wired for Phase 10 multi-campus isolation
+  studentId         String
+  sectionId         String?
+  termKey           String
+  markedDays        Int
+  attendedDays      Int
+  attendancePercent Decimal   @db.Decimal(5, 2)
+  thresholdPct      Decimal   @db.Decimal(5, 2)   // snapshot of the setting used
+  status            String    @default("ISSUED")  // ISSUED | ACKNOWLEDGED | RESOLVED
+  lastNotifiedPct   Decimal?  @db.Decimal(5, 2)
+  notifyCount       Int       @default(0)
+  firstIssuedAt     DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  @@unique([college_id, studentId, termKey])
+  @@index([college_id, status])
+}
+
+model JobRunLog {
+  id         String    @id @default(uuid())
+  college_id String
+  campus_id  String?
+  jobKey     String
+  runKey     String
+  status     String    @default("RUNNING") // RUNNING | COMPLETED | FAILED
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+  metaJson   Json?
+
+  @@unique([college_id, jobKey, runKey])
+}
+
+model AbsenceAlertLog {
+  id         String   @id @default(uuid())
+  college_id String
+  campus_id  String?  // Pre-wired for Phase 10 multi-campus isolation
+  studentId  String
+  alertDate  DateTime @db.Date
+  sentAt     DateTime @default(now())
+
+  @@unique([college_id, studentId, alertDate])
+}
+
+// =============================================================================
+// PHASE 9: PLATFORM SECURITY, GOVERNANCE & EXPORT CENTER
+// =============================================================================
+
+// 9A: N07 Admin 2FA & Known Device Tracking
+model KnownDevice {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?  // Multi-campus readiness
+  userId       String
+  deviceIdHash String
+  firstSeenAt  DateTime @default(now())
+  lastSeenAt   DateTime @default(now())
+  lastIp       String?
+  userAgent    String?
+
+  @@unique([college_id, userId, deviceIdHash])
+  @@index([college_id, userId])
+}
+
+// 9B: N01 Export Center
+model ExportJob {
+  id              String    @id @default(uuid())
+  college_id      String
+  campus_id       String?
+  userId          String
+  exportType      String    // STUDENTS | ATTENDANCE | FEES | GAZETTE | LEDGER | AUDIT_LOG
+  format          String    // CSV | XLSX | PDF | JSON
+  filtersJson     Json?
+  periodKey       String    // YYYY-MM
+  status          String    // QUEUED | RUNNING | READY | FAILED | EXPIRED
+  fileKey         String?   // category EXPORTS (server-exempt)
+  rowCount        Int       @default(0)
+  sizeBytes       BigInt    @default(0)
+  failureReason   String?
+  quotaRefundedAt DateTime?
+  claimedBy       String?
+  heartbeatAt     DateTime?
+  expiresAt       DateTime
+  createdAt       DateTime  @default(now())
+
+  @@index([college_id, createdAt(sort: Desc)])
+  @@index([college_id, periodKey])
+  @@index([status, heartbeatAt])
+  @@index([status, expiresAt])
+}
+
+// 9C: N10 Custom Roles & Permissions
+model CustomRole {
+  id           String           @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  name         String
+  description  String?
+  permissions  String[]         // validated against catalog
+  isAdminClass Boolean          @default(false)
+  createdBy    String
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  assignments  UserCustomRole[]
+
+  @@unique([college_id, name])
+  @@unique([id, college_id])
+}
+
+model UserCustomRole {
+  id         String     @id @default(uuid())
+  college_id String
+  campus_id  String?
+  userId     String
+  roleId     String
+  assignedBy String
+  assignedAt DateTime   @default(now())
+  role       CustomRole @relation(fields: [roleId, college_id], references: [id, college_id], onDelete: Cascade)
+
+  @@unique([college_id, userId, roleId])
+  @@index([college_id, userId])
+}
+
+// 9D: N11 Multi-Step Approval Workflows
+model ApprovalChain {
+  id           String              @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  workflowType String              // FEE_CONCESSION | FEE_REFUND | STAFF_LEAVE | MARKS_EDIT | PURCHASE_ORDER
+  isActive     Boolean             @default(true)
+  steps        ApprovalChainStep[]
+
+  @@unique([college_id, workflowType])
+}
+
+model ApprovalChainStep {
+  id           String        @id @default(uuid())
+  chainId      String
+  stepNumber   Int
+  approverType String        // ROLE | USER | CUSTOM_ROLE
+  approverRef  String        // role name, userId or customRoleId
+  chain        ApprovalChain @relation(fields: [chainId], references: [id], onDelete: Cascade)
+
+  @@unique([chainId, stepNumber])
+}
+
+model ApprovalRequest {
+  id           String                @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  workflowType String
+  requesterId  String
+  currentStep  Int                   @default(1)
+  totalSteps   Int
+  status       String                // PENDING | APPROVED | REJECTED | CANCELLED
+  payloadJson  Json
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+  steps        ApprovalRequestStep[]
+  actions      ApprovalAction[]
+
+  @@index([college_id, workflowType, status])
+  @@index([college_id, requesterId])
+}
+
+model ApprovalRequestStep {
+  id           String          @id @default(uuid())
+  requestId    String
+  college_id   String
+  campus_id    String?
+  stepNumber   Int
+  approverType String
+  approverRef  String
+  request      ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, stepNumber])
+}
+
+model ApprovalAction {
+  id         String          @id @default(uuid())
+  requestId  String
+  college_id String
+  campus_id  String?
+  stepNumber Int
+  actorId    String
+  action     String          // APPROVED | REJECTED | CANCELLED
+  note       String?
+  actedAt    DateTime        @default(now())
+  request    ApprovalRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@unique([requestId, stepNumber, action])
+}
+
+// 9E: N06 Public REST API & Webhooks
+model ApiKey {
+  id         String    @id @default(uuid())
+  college_id String
+  campus_id  String?
+  name       String
+  keyPrefix  String
+  keyHash    String    @unique
+  scopes     String[]
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  isActive   Boolean   @default(true)
+  createdBy  String
+  createdAt  DateTime  @default(now())
+
+  @@index([college_id, isActive])
+}
+
+model WebhookSubscription {
+  id                   String            @id @default(uuid())
+  college_id           String
+  campus_id            String?
+  targetUrl            String
+  secretEnc            String
+  events               String[]
+  isActive             Boolean           @default(true)
+  consecutiveAbandoned Int               @default(0)
+  disabledReason       String?
+  createdAt            DateTime          @default(now())
+  deliveries           WebhookDelivery[]
+
+  @@index([college_id, isActive])
+}
+
+model WebhookDelivery {
+  id             String              @id @default(uuid())
+  college_id     String
+  campus_id      String?
+  subscriptionId String
+  eventType      String
+  payloadJson    Json
+  attempt        Int                 @default(0)
+  status         String              // PENDING | DELIVERED | ABANDONED
+  nextAttemptAt  DateTime
+  lastStatusCode Int?
+  lastError      String?
+  createdAt      DateTime            @default(now())
+  deliveredAt    DateTime?
+  subscription   WebhookSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  @@index([status, nextAttemptAt])
+  @@index([college_id, subscriptionId])
+}
+
+model ApiUsageWindow {
+  college_id String
+  apiKeyId   String
+  windowKey  String   // 'M:2026-11' or 'm:2026-11-05T10:15'
+  count      Int      @default(0)
+
+  @@id([college_id, apiKeyId, windowKey])
+}
+
+// 9F: N05 Institutional Data Backup
+model BackupJob {
+  id            String    @id @default(uuid())
+  college_id    String
+  campus_id     String?
+  requestedBy   String
+  status        String    // QUEUED | RUNNING | READY | FAILED | EXPIRED
+  archiveKey    String?   // category BACKUPS (server-exempt)
+  manifestKey   String?
+  sizeBytes     BigInt    @default(0)
+  claimedBy     String?
+  heartbeatAt   DateTime?
+  expiresAt     DateTime
+  failureReason String?
+  createdAt     DateTime  @default(now())
+
+  @@index([college_id, createdAt(sort: Desc)])
+  @@index([status, heartbeatAt])
+}
+
+// 9H: N03 Scheduled Executive Digest
+model DigestConfig {
+  id         String   @id @default(uuid())
+  college_id String   @unique
+  campus_id  String?
+  isEnabled  Boolean  @default(false)
+  recipients String[]
+  weekday    Int      // 1-7 (1=Monday ... 7=Sunday)
+  sendHour   Int      // 0-23, PKT
+  updatedAt  DateTime @updatedAt
+}
+
+// 9I: N02 Board-Format Gazette Profiles
+model BoardExportProfile {
+  id          String   @id @default(uuid())
+  boardCode   String   @unique // e.g. BISE_LHR, BISE_FSD, FBISE
+  boardName   String
+  columnsJson Json
+  version     Int      @default(1)
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+// 9J: N04 Accountant Journal Head Mapping
+model AccountHeadMapping {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  sourceType  String   // FEE_TYPE | PAYMENT_METHOD | FINE | REFUND
+  sourceKey   String
+  accountName String
+  accountCode String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([college_id, sourceType, sourceKey])
+  @@index([college_id])
+}
+
+// ─── Phase 10: Infrastructure, Multi-Campus & Compliance ─────────
+
+// 10A: N15 Campus IP Allow-Listing (Enterprise)
+model IpAllowlistRule {
+  id         String   @id @default(uuid())
+  college_id String
+  campus_id  String?  // Optional branch-office IP restriction
+  label      String   // e.g. "Main Accounts Office", "Gulberg Sub-Office"
+  cidr       String   // CIDR or single IP
+  isActive   Boolean  @default(true)
+  createdBy  String
+  createdAt  DateTime @default(now())
+
+  @@index([college_id, isActive])
+}
+
+model IpAllowlistViolation {
+  id         String   @id @default(uuid())
+  college_id String
+  campus_id  String?
+  userId     String?
+  ip         String
+  path       String
+  mode       String   // LOG_ONLY | ENFORCE
+  dayKey     String   // YYYY-MM-DD
+  createdAt  DateTime @default(now())
+
+  @@unique([college_id, userId, ip, dayKey])
+  @@index([college_id, createdAt(sort: Desc)])
+}
+
+// 10C: N16 Data Retention Policies & Legal Hold (Enterprise)
+model LegalHold {
+  id            String    @id @default(uuid())
+  college_id    String
+  campus_id     String?   // Pre-wired for campus-specific legal inquiries
+  title         String
+  reason        String
+  scopeType     String    // ALL_STUDENTS | SESSION | STUDENT
+  targetId      String?
+  placedBy      String
+  isActive      Boolean   @default(true)
+  releasedAt    DateTime?
+  releasedBy    String?
+  releaseReason String?
+  createdAt     DateTime  @default(now())
+
+  @@index([college_id, isActive])
+}
+
+model RetentionPolicy {
+  id         String   @id @default(uuid())
+  college_id String
+  campus_id  String?
+  entityType String   // TRASHED_STUDENT | STORED_FILE
+  retainDays Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([college_id, entityType])
+}
+
+// 10E / 10F: §10.1 & N18 Campus Model (Option B)
+model Campus {
+  id         String   @id @default(uuid())
+  college_id String
+  name       String
+  code       String
+  address    String?
+  isDefault  Boolean  @default(false)
+  isActive   Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@unique([college_id, code])
+  @@index([college_id, isActive])
+}
+
+// 10G: N19 Inter-Campus Student Transfer Management (Enterprise)
+model StudentCampusTransfer {
+  id            String   @id @default(uuid())
+  college_id    String
+  student_id    String
+  fromSectionId String
+  toSectionId   String
+  fromCampusId  String
+  toCampusId    String
+  reason        String?
+  transferredBy String
+  createdAt     DateTime @default(now())
+
+  @@index([college_id, student_id])
+}
+
+
+
+
+
+
+

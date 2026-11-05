@@ -181,6 +181,9 @@ async function getEntitlements(collegeId, dbClient = null) {
     documentOcrMonthly: baseWithOverrides.documentOcrMonthly,
     noticeTranslationMonthly: baseWithOverrides.noticeTranslationMonthly,
     askYourDataMonthly: baseWithOverrides.askYourDataMonthly,
+    exportsCsvMonthly: baseWithOverrides.exportsCsvMonthly !== undefined ? baseWithOverrides.exportsCsvMonthly : (baseWithOverrides.exportsMonthly?.csv ?? (PLAN_LIMITS[planId]?.exportsCsvMonthly || 0)),
+    exportsPdfMonthly: baseWithOverrides.exportsPdfMonthly !== undefined ? baseWithOverrides.exportsPdfMonthly : (baseWithOverrides.exportsMonthly?.pdf ?? (PLAN_LIMITS[planId]?.exportsPdfMonthly || 0)),
+    exportMaxRows: baseWithOverrides.exportMaxRows !== undefined ? baseWithOverrides.exportMaxRows : (baseWithOverrides.exportsMonthly?.maxCsvRows ?? (PLAN_LIMITS[planId]?.exportMaxRows || 1000)),
     exportsMonthly: typeof baseWithOverrides.exportsMonthly === 'object' ? { ...baseWithOverrides.exportsMonthly } : baseWithOverrides.exportsMonthly,
     apiCallsMonthly: baseWithOverrides.apiCallsMonthly,
     backupZipMonthly: baseWithOverrides.backupZipMonthly

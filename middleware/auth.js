@@ -18,6 +18,16 @@ const protect = async (req, res, next) => {
 
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+    // Phase 9A: Pre-auth and enrollment tokens can NEVER be used as regular session JWTs
+    if (decoded.scope === 'PREAUTH_2FA' || decoded.scope === 'ENROLL_2FA') {
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_SESSION_SCOPE',
+        message: 'Pre-authentication or enrollment token cannot be used as a session token'
+      });
+    }
+
     const prisma = getSystemClient();
     const user = await prisma.user.findUnique({
       where: { id: decoded.userId }
@@ -56,7 +66,10 @@ const protect = async (req, res, next) => {
       ...user,
       _id: user.id
     };
-    next();
+
+    // Phase 10: N15 Campus IP Allow-Listing Enforcement
+    const { ipAllowlistMiddleware } = require('./ipAllowlist.middleware');
+    return ipAllowlistMiddleware(req, res, next);
   } catch (error) {
     return res.status(401).json({
       success: false,
@@ -65,4 +78,6 @@ const protect = async (req, res, next) => {
   }
 };
 
+protect.authMiddleware = protect;
+protect.protect = protect;
 module.exports = protect;

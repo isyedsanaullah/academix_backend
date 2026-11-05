@@ -31,6 +31,9 @@ try {
 
 const app = express();
 
+// Phase 10: Configure Express trust proxy for accurate client IP identification (N15)
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
+
 // Middleware
 const rawClientUrls = (process.env.CLIENT_URL || '')
   .split(',')
@@ -160,6 +163,7 @@ app.use('/api/teachers', require('./routes/teacher.routes'));
 app.use('/api/employees', require('./routes/employee.routes'));
 
 // Academic Operations
+app.use('/api/attendance/shortages', require('./routes/attendanceShortage.routes'));
 app.use('/api/attendance', require('./routes/attendance.routes'));
 app.use('/api/fees', require('./routes/fee.routes'));
 app.use('/api/payment-proofs', require('./routes/paymentProof.routes'));
@@ -181,6 +185,29 @@ app.use('/api/timetables', require('./routes/timetable.routes'));
 app.use('/api/timetable', require('./routes/timetableGenerator.routes'));
 app.use('/api/universal-timetables', require('./routes/universalTimetable.routes'));
 app.use('/api/substitutions', require('./routes/substitution.routes'));
+app.use('/api/class-diary', require('./routes/classDiary.routes'));
+app.use('/api/academic-calendar', require('./routes/classDiary.routes'));
+app.use('/api/bulk-import', require('./routes/bulkImport.routes'));
+app.use('/api/exports', require('./routes/export.routes'));
+app.use('/api/custom-roles', require('./routes/customRole.routes'));
+app.use('/api/approval-workflows', require('./routes/approvalWorkflow.routes'));
+app.use('/api/v1', require('./routes/v1.routes'));
+app.use('/api/api-keys', require('./routes/apiKey.routes'));
+app.use('/api/webhooks', require('./routes/webhook.routes'));
+app.use('/api/backups', require('./routes/backup.routes'));
+app.use('/staff-app', require('./routes/staffApp.routes'));
+app.use('/api/staff-app', require('./routes/staffApp.routes'));
+app.use('/api/executive-digest', require('./routes/digest.routes'));
+app.use('/api/accountant-journal', require('./routes/accountHeadMapping.routes'));
+app.use('/api/ip-allowlist', require('./routes/ipAllowlist.routes'));
+app.use('/api/legal-hold', require('./routes/legalHold.routes'));
+app.use('/api/campuses', require('./routes/campus.routes'));
+app.use('/api/campus-transfers', require('./routes/transfer.routes'));
+app.use('/api/staff-attendance', require('./routes/staffAttendance.routes'));
+app.use('/api/biometric', require('./routes/biometric.routes'));
+app.use('/api/parent', require('./routes/parent.routes'));
+app.use('/api/admin/parent-portal', require('./routes/parentAdmin.routes'));
+app.use('/api/executive', require('./routes/executiveKpi.routes'));
 
 // Communication & Security
 app.use('/api/announcements', require('./routes/announcement.routes'));

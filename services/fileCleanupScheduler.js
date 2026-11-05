@@ -63,6 +63,14 @@ async function runTenantFileCleanup(tenantDb, collegeId) {
 
     for (const proof of oldPaymentProofs) {
       try {
+        // Phase 10: Legal hold delete protection check
+        const { getActiveLegalHold } = require('./legalHoldService');
+        const hold = await getActiveLegalHold(collegeId, { studentId: proof.student_id, sessionId: proof.session_id });
+        if (hold) {
+          stats.skippedHeldFiles = (stats.skippedHeldFiles || 0) + 1;
+          continue;
+        }
+
         if (proof.objectKey) {
           await deleteObject(proof.objectKey).catch(() => {});
         }

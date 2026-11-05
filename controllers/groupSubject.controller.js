@@ -344,8 +344,24 @@ exports.moveStudentGroup = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'Target group not found' });
     }
 
-    // Check target group seats if configured
-    if (targetGroup.seats && targetGroup.seats > 0) {
+    // Check target group seat allocation (Phase 8A)
+    const seatAlloc = await tenantDb.groupSeatAllocation.findUnique({
+      where: {
+        college_id_group_id_session_id: {
+          college_id: req.collegeId,
+          group_id: targetGroup.id,
+          session_id: student.session_id
+        }
+      }
+    });
+
+    if (seatAlloc && seatAlloc.maxSeats > 0 && seatAlloc.allocatedSeats >= seatAlloc.maxSeats) {
+      return res.status(409).json({
+        success: false,
+        code: 'GROUP_SEATS_EXHAUSTED',
+        message: `Target group "${targetGroup.name}" seats are exhausted for this session (Capacity: ${seatAlloc.maxSeats}).`
+      });
+    } else if (targetGroup.seats && targetGroup.seats > 0) {
       const activeCount = await tenantDb.student.count({
         where: {
           college_id: req.collegeId,
@@ -355,8 +371,9 @@ exports.moveStudentGroup = async (req, res, next) => {
         }
       });
       if (activeCount >= targetGroup.seats) {
-        return res.status(400).json({
+        return res.status(409).json({
           success: false,
+          code: 'GROUP_SEATS_EXHAUSTED',
           message: `Target group "${targetGroup.name}" is full (Capacity: ${targetGroup.seats}, Enrolled: ${activeCount}).`
         });
       }
@@ -435,6 +452,34 @@ exports.moveStudentGroup = async (req, res, next) => {
         ...(section !== undefined && { section })
       }
     });
+
+    // Update seat allocation counts (Phase 8A)
+    if (seatAlloc) {
+      await tenantDb.groupSeatAllocation.update({
+        where: { id: seatAlloc.id },
+        data: { allocatedSeats: { increment: 1 } }
+      });
+    }
+    const oldGroupRecord = await tenantDb.group.findFirst({
+      where: { college_id: req.collegeId, name: oldGroup }
+    });
+    if (oldGroupRecord) {
+      const oldAlloc = await tenantDb.groupSeatAllocation.findUnique({
+        where: {
+          college_id_group_id_session_id: {
+            college_id: req.collegeId,
+            group_id: oldGroupRecord.id,
+            session_id: student.session_id
+          }
+        }
+      });
+      if (oldAlloc && oldAlloc.allocatedSeats > 0) {
+        await tenantDb.groupSeatAllocation.update({
+          where: { id: oldAlloc.id },
+          data: { allocatedSeats: { decrement: 1 } }
+        });
+      }
+    }
 
     // Write audit activity log if model exists
     try {

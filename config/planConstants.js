@@ -50,6 +50,9 @@ const PLAN_LIMITS = {
     documentOcrMonthly: 0,
     noticeTranslationMonthly: 0,
     askYourDataMonthly: 0,
+    exportsCsvMonthly: 3,
+    exportsPdfMonthly: 0,
+    exportMaxRows: 1000,
     exportsMonthly: { csv: 3, maxCsvRows: 1000, pdf: 0 },
     apiCallsMonthly: 0,
     backupZipMonthly: 0
@@ -70,6 +73,9 @@ const PLAN_LIMITS = {
     documentOcrMonthly: 0,
     noticeTranslationMonthly: 30,
     askYourDataMonthly: 0,
+    exportsCsvMonthly: 60,
+    exportsPdfMonthly: 0,
+    exportMaxRows: 10000,
     exportsMonthly: { csv: 60, maxCsvRows: 10000, pdf: 0 },
     apiCallsMonthly: 0,
     backupZipMonthly: 0
@@ -90,7 +96,10 @@ const PLAN_LIMITS = {
     documentOcrMonthly: 150,
     noticeTranslationMonthly: 300,
     askYourDataMonthly: 50,
-    exportsMonthly: { csv: Infinity, maxCsvRows: Infinity, pdf: 60 },
+    exportsCsvMonthly: -1,
+    exportsPdfMonthly: 60,
+    exportMaxRows: 100000,
+    exportsMonthly: { csv: Infinity, maxCsvRows: 100000, pdf: 60 },
     apiCallsMonthly: 0,
     backupZipMonthly: 0
   },
@@ -110,7 +119,10 @@ const PLAN_LIMITS = {
     documentOcrMonthly: Infinity,
     noticeTranslationMonthly: Infinity,
     askYourDataMonthly: Infinity,
-    exportsMonthly: { csv: Infinity, maxCsvRows: Infinity, pdf: Infinity },
+    exportsCsvMonthly: -1,
+    exportsPdfMonthly: -1,
+    exportMaxRows: 1000000,
+    exportsMonthly: { csv: Infinity, maxCsvRows: 1000000, pdf: Infinity },
     apiCallsMonthly: 100000,
     backupZipMonthly: 1
   }

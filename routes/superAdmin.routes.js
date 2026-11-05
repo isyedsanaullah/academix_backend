@@ -133,6 +133,33 @@ router.post('/billing/approve/:paymentId', approvePaymentHandler);
 router.post('/billing/reject/:paymentId', rejectPaymentHandler);
 router.get('/billing/receipt/:paymentId', getReceiptUrl);
 
+// ---- Phase 6C: Plans & Platform Health ----
+const { getPlans, updatePlanVersion } = require('../controllers/superAdminPlans.controller');
+const { getHealthOverview } = require('../controllers/superAdminHealth.controller');
+
+router.get('/plans', getPlans);
+router.put('/plans/:planId', updatePlanVersion);
+router.get('/health', getHealthOverview);
+
+// ---- Phase 6B: Governance Deck & Overrides ----
+const {
+  setCollegeQuotas,
+  setCollegeFeatures,
+  handleCollegeAction,
+  adjustCollegeCredits
+} = require('../controllers/superAdminGovernance.controller');
+const { requireStepUpAuth } = require('../middleware/stepUpAuth');
+
+router.put('/colleges/:id/quotas-override', setCollegeQuotas);
+router.put('/colleges/:id/features-override', setCollegeFeatures);
+router.post('/colleges/:id/actions', handleCollegeAction);
+router.post('/colleges/:id/adjust-credits', requireStepUpAuth, adjustCollegeCredits);
+
+// ---- Phase 8.0: Outbox Dead-Letter Queue & Retries ----
+const { getDeadLetters, retryDeadLetter } = require('../controllers/superAdminOutbox.controller');
+router.get('/outbox/dead-letter', getDeadLetters);
+router.post('/outbox/:id/retry', retryDeadLetter);
+
 router.meta = {
   "exempt": "platform",
   "reason": "Platform super-admin multi-tenant control plane"
