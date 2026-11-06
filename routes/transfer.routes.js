@@ -13,3 +13,4 @@ router.get('/', transferController.listTransfers);
 router.post('/', transferController.transferStudent);
 
 module.exports = router;
+

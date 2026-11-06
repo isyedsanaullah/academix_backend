@@ -75,11 +75,22 @@ async function createCampus(collegeId, { name, code, address = null, isDefault =
   }
 
   const cleanCode = code.trim().toUpperCase();
+  const { getEntitlements } = require('./entitlements');
+  const entitlements = await getEntitlements(collegeId, prisma);
+  const maxCampuses = entitlements.effectiveLimits.maxCampuses || 1;
 
   // Enforce campus quota inside an atomic transaction
-  return await withQuota(collegeId, 'campuses', 1, async (tx) => {
-    // Pessimistic lock on College
-    await tx.$executeRaw`SELECT id FROM "College" WHERE id = ${collegeId} FOR UPDATE`;
+  return await prisma.$transaction(async (tx) => {
+    const currentCount = await tx.campus.count({
+      where: { college_id: collegeId }
+    });
+
+    if (currentCount >= maxCampuses) {
+      const err = new Error(`Campus limit reached. Your ${entitlements.planId} plan permits at most ${maxCampuses} campus(es).`);
+      err.statusCode = 422;
+      err.code = 'QUOTA_EXCEEDED';
+      throw err;
+    }
 
     const existingCode = await tx.campus.findFirst({
       where: { college_id: collegeId, code: cleanCode }
@@ -244,15 +255,21 @@ async function getMultiCampusDashboard(collegeId) {
     const staffRate = ((staffPresentCount / staffTotalCount) * 100).toFixed(1);
 
     // 3. Fee recovery for campus
-    const fees = await prisma.fee.findMany({
+    const studentsInCampus = sectionNames.length > 0 ? await prisma.student.findMany({
+      where: { college_id: collegeId, section: { in: sectionNames } },
+      select: { id: true }
+    }) : [];
+    const studentIds = studentsInCampus.map(s => s.id);
+
+    const fees = studentIds.length > 0 ? await prisma.fee.findMany({
       where: {
         college_id: collegeId,
-        student: { section: { in: sectionNames } }
+        student_id: { in: studentIds }
       },
       select: { totalAmount: true, paidAmount: true }
-    });
-    const feeDue = fees.reduce((sum, f) => sum + (f.totalAmount || 0), 0);
-    const feeCollected = fees.reduce((sum, f) => sum + (f.paidAmount || 0), 0);
+    }) : [];
+    const feeDue = fees.reduce((sum, f) => sum + Number(f.totalAmount || 0), 0);
+    const feeCollected = fees.reduce((sum, f) => sum + Number(f.paidAmount || 0), 0);
     const feeRecoveryRate = feeDue > 0 ? ((feeCollected / feeDue) * 100).toFixed(1) : '100.0';
 
     perCampusData.push({

@@ -59,8 +59,7 @@ async function executeTransferCore(tx, payload, { dryRun = false } = {}) {
 
   // 3. Resolve destination section & destination campus
   const toSection = await tx.section.findFirst({
-    where: { id: toSectionId, college_id: collegeId },
-    include: { session: true }
+    where: { id: toSectionId, college_id: collegeId }
   });
   if (!toSection) {
     const err = new Error('Destination section not found in this institution');
@@ -164,7 +163,7 @@ async function initiateTransfer({ collegeId, studentId, toSectionId, reason, act
   }
 
   // Check N11 Approval Chain
-  const approvalRequest = await checkAndCreateApprovalRequest({
+  const approvalResult = await checkAndCreateApprovalRequest({
     collegeId,
     campusId: toSection.campus_id,
     workflowType: 'CAMPUS_TRANSFER',
@@ -178,11 +177,11 @@ async function initiateTransfer({ collegeId, studentId, toSectionId, reason, act
     }
   });
 
-  if (approvalRequest) {
+  if (approvalResult?.requiresApproval) {
     return {
       status: 202,
       requiresApproval: true,
-      approvalRequestId: approvalRequest.id,
+      approvalRequestId: approvalResult.approvalRequestId,
       message: 'Campus transfer submitted for multi-step approval workflow'
     };
   }

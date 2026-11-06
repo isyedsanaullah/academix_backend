@@ -5,7 +5,7 @@ const assert = require('assert');
 const { getSystemClient } = require('../config/prismaManager');
 const campusService = require('../services/campusService');
 const transferService = require('../services/transferService');
-const { configureChain } = require('../services/approvalService');
+const { createOrUpdateChain } = require('../services/approvalService');
 
 async function runSubphaseTests() {
   console.log('\n======================================================');
@@ -173,8 +173,9 @@ async function runSubphaseTests() {
       const fee = await prisma.fee.create({
         data: {
           college_id: college.id,
+          session_id: session.id,
           student_id: student.id,
-          feeType: 'Tuition Fee',
+          month: '2026-11',
           totalAmount: 15000,
           paidAmount: 5000,
           status: 'partial'
@@ -233,8 +234,8 @@ async function runSubphaseTests() {
 
       // Verify fee ledger row is untouched
       const feeAfterTransfer = await prisma.fee.findUnique({ where: { id: fee.id } });
-      assert.strictEqual(feeAfterTransfer.totalAmount, 15000);
-      assert.strictEqual(feeAfterTransfer.paidAmount, 5000);
+      assert.strictEqual(Number(feeAfterTransfer.totalAmount), 15000);
+      assert.strictEqual(Number(feeAfterTransfer.paidAmount), 5000);
       assert.strictEqual(feeAfterTransfer.student_id, student.id);
 
       // Verify StudentCampusTransfer audit row
@@ -253,12 +254,12 @@ async function runSubphaseTests() {
       });
 
       // Configure a 1-step approval chain for CAMPUS_TRANSFER
-      await configureChain({
+      await createOrUpdateChain({
         collegeId: college.id,
         workflowType: 'CAMPUS_TRANSFER',
         name: 'Inter-Campus Transfer Approval',
         steps: [
-          { stepNumber: 1, approverRole: 'principal', stepName: 'Principal Sanction' }
+          { stepNumber: 1, approverType: 'ROLE', approverRef: 'principal', stepName: 'Principal Sanction' }
         ]
       });
 
@@ -271,6 +272,7 @@ async function runSubphaseTests() {
           college_id: college.id,
           campus_id: dhaCampus.id,
           session_id: session.id,
+          class_id: mainClass.id,
           name: 'Section D1 - DHA',
           code: 'DHA_D1',
           capacity: 40

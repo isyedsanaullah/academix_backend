@@ -16,3 +16,4 @@ router.put('/:id', campusController.updateCampus);
 router.delete('/:id', campusController.deleteCampus);
 
 module.exports = router;
+
