@@ -247,6 +247,10 @@ app.use('/api/ai/chat', require('./routes/aiChat.routes'));
 app.use('/api/ai/generate', require('./routes/aiGenerator.routes'));
 
 // Public & Infrastructure Health
+const { getPublicServicesCatalog } = require('./controllers/subscriptionRequest.controller');
+app.get('/api/public/services-catalog', getPublicServicesCatalog);
+app.get('/api/services-catalog', getPublicServicesCatalog);
+app.get('/api/services', getPublicServicesCatalog);
 app.use('/api/public', require('./routes/public.routes'));
 app.use('/api/health', require('./routes/health.routes'));
 

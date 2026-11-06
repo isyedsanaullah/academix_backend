@@ -100,6 +100,8 @@ const checkOnlineAdmissions = async (req, res, next) => {
 };
 
 // Public routes — no authentication required
+router.get('/services-catalog', getPublicServicesCatalog);
+router.get('/services', getPublicServicesCatalog);
 router.get('/colleges', getColleges);
 router.get('/college/:code', getCollegePage);
 router.get('/tenant/:slug', getTenantPublicProfile);
