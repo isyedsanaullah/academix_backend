@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const ipAllowlistController = require('../controllers/ipAllowlist.controller');
-const { protect, authorize } = require('../middleware/auth');
+const protect = require('../middleware/auth');
+const authorize = require('../middleware/rbac');
 const { subscriptionGate } = require('../middleware/subscriptionGate');
 
 // All endpoints require authenticated admin/principal and Enterprise entitlement

@@ -374,3 +374,7 @@ exports.getCreditSummary = async (req, res) => {
   }
 };
 
+// Aliases
+exports.matricCardOcr = exports.ocrMatricCard;
+exports.paymentSlipOcr = exports.ocrPaymentSlip;
+

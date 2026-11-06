@@ -24,8 +24,8 @@ router.post('/books/index', subscriptionGate('ai-knowledge-library'), aiControll
 router.post('/knowledge/search', subscriptionGate('ai-knowledge-library'), aiController.searchKnowledge);
 
 // Engine 3: Vision OCR & Payment Reconciliation (#107, #111, N43)
-router.post('/ocr/matric-card', subscriptionGate('document-ocr'), aiController.matricCardOcr);
-router.post('/ocr/payment-slip', subscriptionGate('payment-screenshot-ocr'), aiController.paymentSlipOcr);
+router.post('/ocr/matric-card', subscriptionGate('document-ocr'), aiController.ocrMatricCard);
+router.post('/ocr/payment-slip', subscriptionGate('payment-screenshot-ocr'), aiController.ocrPaymentSlip);
 router.post('/reconcile-payment', subscriptionGate('auto-payment-matching'), aiController.reconcilePayment);
 
 // Engine 4: Diagnostic Heatmaps & Study Plans (#105, #106)

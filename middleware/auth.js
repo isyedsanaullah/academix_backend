@@ -80,4 +80,5 @@ const protect = async (req, res, next) => {
 
 protect.authMiddleware = protect;
 protect.protect = protect;
+protect.authorize = require('./rbac');
 module.exports = protect;

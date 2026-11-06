@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { protect } = require('../middleware/auth.middleware');
+const protect = require('../middleware/auth');
 const { subscriptionGate } = require('../middleware/subscriptionGate');
 const controller = require('../controllers/staffAttendance.controller');
 

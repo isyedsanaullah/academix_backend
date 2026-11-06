@@ -2,7 +2,8 @@
 const express = require('express');
 const router = express.Router();
 const transferController = require('../controllers/transfer.controller');
-const { protect, authorize } = require('../middleware/auth');
+const protect = require('../middleware/auth');
+const authorize = require('../middleware/rbac');
 const { subscriptionGate } = require('../middleware/subscriptionGate');
 
 router.use(protect);
