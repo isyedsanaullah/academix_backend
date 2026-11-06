@@ -39,6 +39,23 @@ exports.getSubscriptionPlans = async (req, res, next) => {
     // Sort canonically: starter -> standard -> premium -> enterprise
     plans.sort((a, b) => (PLAN_LEVEL[a.planId] ?? 0) - (PLAN_LEVEL[b.planId] ?? 0));
 
+    // Normalize plans with explicit monthlyPrice and yearlyPrice properties for frontend consumers
+    const formattedPlans = plans.map(p => {
+      const canonicalPrice = PLAN_PRICING[p.planId] || { monthly: 0, yearly: 0 };
+      const monthlyPrice = p.priceMonthlyPkr ?? p.price?.monthly ?? canonicalPrice.monthly;
+      const yearlyPrice = p.priceYearlyPkr ?? p.price?.yearly ?? canonicalPrice.yearly;
+      return {
+        ...p,
+        monthlyPrice,
+        yearlyPrice,
+        price: {
+          monthly: monthlyPrice,
+          yearly: yearlyPrice,
+          currency: 'PKR'
+        }
+      };
+    });
+
     // Fetch public add-on pricing catalog
     const addons = await prisma.addonCatalog.findMany({
       where: { isAvailable: true },
@@ -48,7 +65,7 @@ exports.getSubscriptionPlans = async (req, res, next) => {
     res.json({
       success: true,
       data: {
-        plans,
+        plans: formattedPlans,
         addons,
         counts: {
           starter: 33,
