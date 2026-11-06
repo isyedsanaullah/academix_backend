@@ -856,6 +856,7 @@ model GateLog {
 model LeaveApplication {
   id            String    @id @default(uuid())
   college_id    String
+  campus_id     String?
   session_id    String
   student_id    String
   user_id       String
@@ -868,6 +869,10 @@ model LeaveApplication {
   reviewedBy    String?
   reviewedAt    DateTime?
   reviewRemarks String?
+  isEmergency         Boolean   @default(false)
+  medicalCertificate  String?   // StoredFile.id (category GENERAL / PHOTOS)
+  autoAttendanceDone  Boolean   @default(false)
+  appliedByRole       String    @default("STUDENT") // STUDENT | GUARDIAN | TEACHER_ON_BEHALF
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
@@ -2360,6 +2365,7 @@ model CollegeSubscriptionPayment {
 model MessageCreditLedgerEntry {
   id           String   @id @default(uuid())
   college_id   String
+  campus_id    String?
   bucket       String   // PLAN, PURCHASED
   periodKey    String?  // YYYY-MM for PLAN, null for PURCHASED
   delta        Int
@@ -2369,13 +2375,14 @@ model MessageCreditLedgerEntry {
   createdAt    DateTime @default(now())
   college      College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
 
-  @@unique([college_id, bucket, periodKey])
+  @@index([college_id, bucket, periodKey])
   @@index([college_id, bucket, createdAt])
 }
 
 model AICreditLedgerEntry {
   id           String   @id @default(uuid())
   college_id   String
+  campus_id    String?
   bucket       String   // PLAN, PURCHASED
   periodKey    String?  // YYYY-MM for PLAN, null for PURCHASED
   delta        Int
@@ -2385,7 +2392,7 @@ model AICreditLedgerEntry {
   createdAt    DateTime @default(now())
   college      College  @relation(fields: [college_id], references: [id], onDelete: Cascade)
 
-  @@unique([college_id, bucket, periodKey])
+  @@index([college_id, bucket, periodKey])
   @@index([college_id, bucket, createdAt])
 }
 
@@ -3273,6 +3280,961 @@ model StudentCampusTransfer {
 
   @@index([college_id, student_id])
 }
+
+// =========================================================================
+// PHASE 11: ACADEMIC & STUDENT LIFE EXPANSION (15 SERVICES)
+// =========================================================================
+
+// 11A: Exam Operations & Moderation (N25, N26, N27, N28)
+
+model ExamHall {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  name        String   // "Jinnah Hall", "Room 102"
+  capacity    Int
+  rows        Int      // Grid rows
+  columns     Int      // Grid columns
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  desks       ExamHallDesk[]
+  @@unique([college_id, name])
+  @@index([college_id, isActive])
+}
+
+model ExamHallDesk {
+  id        String   @id @default(uuid())
+  hallId    String
+  rowNum    Int
+  colNum    Int
+  deskCode  String   // e.g. "JH-R1-C1"
+  hall      ExamHall @relation(fields: [hallId], references: [id], onDelete: Cascade)
+
+  @@unique([hallId, rowNum, colNum])
+}
+
+model ExamSeatingPlan {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  examId      String   // Links to existing Exam model
+  name        String   // "Send-up Exam 2026 Seating Master"
+  status      String   @default("DRAFT") // DRAFT | PUBLISHED | ARCHIVED
+  generatedAt DateTime @default(now())
+
+  seats       ExamAssignedSeat[]
+  invigilators ExamInvigilationDuty[]
+  @@unique([college_id, examId, name])
+}
+
+model ExamAssignedSeat {
+  id            String   @id @default(uuid())
+  seatingPlanId String
+  deskId        String
+  student_id    String
+  examDate      DateTime @db.Date
+  sessionTime   String   // MORNING | EVENING
+
+  seatingPlan   ExamSeatingPlan @relation(fields: [seatingPlanId], references: [id], onDelete: Cascade)
+  @@unique([seatingPlanId, deskId, examDate, sessionTime])
+  @@unique([seatingPlanId, student_id, examDate, sessionTime])
+  @@index([student_id])
+}
+
+model ExamInvigilationDuty {
+  id            String   @id @default(uuid())
+  seatingPlanId String
+  teacher_id    String
+  hallId        String
+  dutyDate      DateTime @db.Date
+  sessionTime   String   // MORNING | EVENING
+  status        String   @default("ASSIGNED") // ASSIGNED | CONFIRMED | SUBSTITUTED
+
+  seatingPlan   ExamSeatingPlan @relation(fields: [seatingPlanId], references: [id], onDelete: Cascade)
+  @@unique([seatingPlanId, teacher_id, dutyDate, sessionTime])
+  @@index([teacher_id, dutyDate])
+}
+
+model QuestionPaperDraft {
+  id            String   @id @default(uuid())
+  college_id    String
+  campus_id     String?
+  examId        String
+  subject_id    String
+  class         String
+  setterId      String   // Teacher userId
+  file_id       String   // StoredFile reference (encrypted/confidential)
+  status        String   @default("DRAFT") // DRAFT | SUBMITTED | MODERATED | APPROVED | REJECTED | SEALED
+  version       Int      @default(1)
+  moderatorId   String?  // Head of Department / peer teacher
+  moderatorNote String?
+  sealedBy      String?  // Principal / Controller of Exams
+  sealedAt      DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  revisions     QuestionPaperRevision[]
+  @@index([college_id, examId, subject_id])
+}
+
+model QuestionPaperRevision {
+  id           String   @id @default(uuid())
+  paperDraftId String
+  version      Int
+  file_id      String
+  uploadedById String
+  changeNotes  String?
+  createdAt    DateTime @default(now())
+
+  draft        QuestionPaperDraft @relation(fields: [paperDraftId], references: [id], onDelete: Cascade)
+  @@unique([paperDraftId, version])
+}
+
+model ResultRecheckRequest {
+  id              String    @id @default(uuid())
+  college_id      String
+  campus_id       String?
+  student_id      String
+  resultId        String    // References existing Result.id
+  subject_id      String
+  reason          String
+  feePaidPkr      Int       @default(500)
+  feeVoucherId    String?   // Linked fee challan for re-checking fee
+  status          String    @default("SUBMITTED") // SUBMITTED | IN_REVIEW | RESOLVED_UNCHANGED | RESOLVED_CHANGED | REJECTED
+  originalMarks   Decimal   @db.Decimal(5, 2)
+  revisedMarks    Decimal?  @db.Decimal(5, 2)
+  committeeNotes  String?
+  reviewedBy      String?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([college_id, resultId, subject_id])
+  @@index([college_id, status])
+}
+
+model StudentReportCardRemark {
+  id              String   @id @default(uuid())
+  college_id      String
+  campus_id       String?
+  student_id      String
+  session_id      String
+  examId          String
+  classTeacherId  String
+  remarks         String   // Qualitative text assessment
+  conductRating   String   // EXCELLENT | GOOD | SATISFACTORY | NEEDS_IMPROVEMENT
+  punctuality     String   // REGULAR | PUNCTUAL | FREQUENT_ABSENTEE
+  boardReadiness  String   // ON_TRACK | AT_RISK | BORDERLINE
+  isPublished     Boolean  @default(false)
+  publishedAt     DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@unique([college_id, student_id, examId])
+  @@index([college_id, session_id, examId])
+}
+
+// 11B: Student Leave & Multi-Head Clearance (N24, N29)
+
+model ClearanceHead {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  name         String   // "Accounts Office", "Central Library", "Physics Lab", "Hostel Warden"
+  code         String   // ACCOUNTS | LIBRARY | LAB_PHYSICS | LAB_CHEMISTRY | HOSTEL | SPORTS | CANTEEN
+  assignedRole String   // accountant | librarian | teacher | employee
+  isMandatory  Boolean  @default(true)
+  displayOrder Int      @default(0)
+  isActive     Boolean  @default(true)
+
+  items        StudentClearanceItem[]
+  @@unique([college_id, code])
+  @@index([college_id, isActive])
+}
+
+model StudentClearanceProcess {
+  id             String    @id @default(uuid())
+  college_id     String
+  campus_id      String?
+  student_id     String
+  session_id     String
+  reason         String    // GRADUATED | MIGRATION | WITHDRAWAL | EXPELLED
+  destination    String?   // "Transfer to Government College Lahore"
+  status         String    @default("IN_PROGRESS") // IN_PROGRESS | CLEARED | REJECTED | CERTIFICATE_ISSUED
+  initiatedById  String
+  completedAt    DateTime?
+  certificateId  String?   @unique
+  certificate    LeavingCertificateRecord? @relation(fields: [certificateId], references: [id])
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  departmentItems StudentClearanceItem[]
+  @@unique([college_id, student_id, session_id])
+  @@index([college_id, status])
+}
+
+model StudentClearanceItem {
+  id            String    @id @default(uuid())
+  processId     String
+  headId        String
+  status        String    @default("PENDING") // PENDING | CLEARED | DUES_OUTSTANDING
+  duesAmountPkr Int       @default(0)
+  remarks       String?
+  clearedById   String?
+  clearedAt     DateTime?
+
+  process       StudentClearanceProcess @relation(fields: [processId], references: [id], onDelete: Cascade)
+  head          ClearanceHead           @relation(fields: [headId], references: [id])
+  @@unique([processId, headId])
+}
+
+model LeavingCertificateRecord {
+  id                 String   @id @default(uuid())
+  college_id         String
+  campus_id          String?
+  student_id         String
+  certificateNumber  String   // SLC-YYYY-XXXXX (gap-free sequence)
+  characterRating    String   // EXEMPLARY | VERY_GOOD | SATISFACTORY
+  conductRemarks     String?
+  admissionDate      DateTime @db.Date
+  leavingDate        DateTime @db.Date
+  reasonForLeaving   String
+  qrVerificationHash String   @unique // SHA-256 for public tamper-proof verification
+  fileKey            String   // Generated PDF in category REPORTS (server-exempt)
+  issuedById         String
+  issuedAt           DateTime @default(now())
+
+  process            StudentClearanceProcess?
+  @@unique([college_id, certificateNumber])
+  @@index([college_id, student_id])
+}
+
+// 11C: Teaching Pacing & LMS Knowledge (N23, N30, N31)
+
+model SyllabusBreakdown {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  session_id   String
+  class        String   // "FSc Part 1"
+  subject_id   String
+  boardName    String   // "BISE Lahore", "Federal Board"
+  totalUnits   Int
+  totalHours   Int
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  units        SyllabusUnit[]
+  @@unique([college_id, session_id, class, subject_id])
+}
+
+model SyllabusUnit {
+  id            String   @id @default(uuid())
+  breakdownId   String
+  unitNumber    Int
+  title         String   // "Chapter 2: Vectors and Equilibrium"
+  subTopics     String[] // ["Cartesian coordinate system", "Addition of vectors", "Torque"]
+  targetWeek    Int      // Academic week number (1 to 32)
+  expectedHours Int
+
+  breakdown     SyllabusBreakdown @relation(fields: [breakdownId], references: [id], onDelete: Cascade)
+  progress      TeacherSyllabusProgress[]
+  @@unique([breakdownId, unitNumber])
+}
+
+model TeacherSyllabusProgress {
+  id           String    @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  unitId       String
+  section_id   String
+  teacher_id   String
+  status       String    @default("IN_PROGRESS") // NOT_STARTED | IN_PROGRESS | COMPLETED
+  completedAt  DateTime?
+  actualHours  Int       @default(0)
+  notes        String?
+  updatedAt    DateTime  @updatedAt
+
+  unit         SyllabusUnit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  @@unique([college_id, unitId, section_id])
+  @@index([college_id, section_id])
+}
+
+model LiveClassSchedule {
+  id              String   @id @default(uuid())
+  college_id      String
+  campus_id       String?
+  section_id      String
+  subject_id      String
+  teacher_id      String
+  title           String
+  platform        String   // GOOGLE_MEET | MS_TEAMS | ZOOM | YOUTUBE_LIVE
+  meetingUrl      String   // Validated HTTPS video link
+  meetingPassword String?
+  scheduledDate   DateTime @db.Date
+  startTime       String   // HH:mm
+  endTime         String   // HH:mm
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+
+  @@index([college_id, section_id, scheduledDate])
+}
+
+model DigitalLectureRecording {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  subject_id   String
+  class        String
+  unitId       String?  // Linked to SyllabusUnit
+  title        String
+  description  String?
+  videoSource  String   // EMBEDDED_YOUTUBE | VIMEO | EXTERNAL_URL
+  videoUrl     String
+  durationMins Int?
+  uploadedById String
+  isPublic     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  @@index([college_id, subject_id, class])
+}
+
+model ForumQuestion {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  subject_id   String
+  class        String
+  student_id   String
+  title        String
+  body         String
+  isPinned     Boolean  @default(false)
+  isClosed     Boolean  @default(false)
+  viewCount    Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  answers      ForumAnswer[]
+  @@index([college_id, subject_id, class])
+}
+
+model ForumAnswer {
+  id           String   @id @default(uuid())
+  questionId   String
+  authorId     String   // User.id or Student.id
+  authorRole   String   // teacher | student
+  body         String
+  isAccepted   Boolean  @default(false) // Verified/endorsed by teacher
+  upvotes      Int      @default(0)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  question     ForumQuestion @relation(fields: [questionId], references: [id], onDelete: Cascade)
+  @@index([questionId])
+}
+
+// 11D: Student Life, Discipline & Alumni (N32, N33, N34)
+
+model DisciplinaryIncident {
+  id              String    @id @default(uuid())
+  college_id      String
+  campus_id       String?
+  student_id      String
+  session_id      String
+  incidentDate    DateTime  @db.Date
+  category        String    // MISCONDUCT | FIGHTING | BUNK | CHEATING | DAMAGE | BULLYING | OTHER
+  severity        String    // LOW | MEDIUM | HIGH | CRITICAL
+  description     String
+  actionTaken     String    // WARNING | FINE | SUSPENSION | PARENT_SUMMON | EXPULSION | NONE
+  fineAmountPkr   Int?      // Linked to fine voucher if fine imposed
+  suspensionDays  Int?
+  reportedById    String
+  hearingDate     DateTime?
+  isResolved      Boolean   @default(false)
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  counselingNotes StudentCounselingLog[]
+  @@index([college_id, student_id])
+  @@index([college_id, category, severity])
+}
+
+model StudentCounselingLog {
+  id           String   @id @default(uuid())
+  incidentId   String?
+  college_id   String
+  campus_id    String?
+  student_id   String
+  counselorId  String   // Staff userId
+  sessionDate  DateTime @db.Date
+  sessionNotes String   // Confidential discussion record
+  actionPlan   String?
+  followUpDate DateTime? @db.Date
+  createdAt    DateTime @default(now())
+
+  incident     DisciplinaryIncident? @relation(fields: [incidentId], references: [id], onDelete: SetNull)
+  @@index([college_id, student_id])
+}
+
+model StudentClub {
+  id                 String   @id @default(uuid())
+  college_id         String
+  campus_id          String?
+  name               String   // "Literary & Debating Society", "Cricket First XI"
+  category           String   // ACADEMIC | SPORTS | CULTURAL | SOCIAL_WORK | LEADERSHIP
+  description        String?
+  leadTeacherId      String   // Club In-Charge / Coach
+  presidentStudentId String?
+  isActive           Boolean  @default(true)
+  createdAt          DateTime @default(now())
+
+  members            StudentClubMember[]
+  events             ClubEvent[]
+  @@unique([college_id, name])
+}
+
+model StudentClubMember {
+  id          String    @id @default(uuid())
+  clubId      String
+  student_id  String
+  role        String    @default("MEMBER") // MEMBER | CAPTAIN | SECRETARY | VICE_PRESIDENT
+  joinedAt    DateTime  @default(now())
+  leftAt      DateTime?
+
+  club        StudentClub @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  @@unique([clubId, student_id])
+  @@index([student_id])
+}
+
+model ClubEvent {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  clubId      String
+  title       String   // "Annual Inter-Collegiate Debating Championship 2026"
+  eventDate   DateTime @db.Date
+  venue       String
+  description String?
+  budgetPkr   Int      @default(0)
+
+  club        StudentClub @relation(fields: [clubId], references: [id], onDelete: Cascade)
+  @@index([college_id, eventDate])
+}
+
+model AlumniProfile {
+  id                  String   @id @default(uuid())
+  college_id          String
+  campus_id           String?
+  student_id          String?  @unique // Nullable link to historical Student record
+  fullName            String
+  fatherName          String?
+  matricRollNumber    String?
+  boardRollNumber     String   // Intermediate 2nd year roll number
+  passingYear         Int      // 2024, 2025, 2026
+  academicGroup       String   // Pre-Medical, Pre-Engineering, ICS
+  finalBoardMarks     Int?
+  finalBoardTotal     Int?     @default(1100)
+  currentStatus       String   // ENROLLED_UNIVERSITY | EMPLOYED | PREPARING | ABROAD
+  universityName      String?  // "King Edward Medical University", "NUST Islamabad"
+  degreeProgram       String?  // "MBBS", "BS Computer Science"
+  email               String?
+  phone               String?
+  linkedInUrl         String?
+  isTestimonialShared Boolean  @default(false)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  @@index([college_id, passingYear, academicGroup])
+  @@index([college_id, currentStatus])
+}
+
+// 11E: Localization & App Capabilities (N09, N21, N22)
+
+model AnnouncementTemplate {
+  id                String   @id @default(uuid())
+  college_id        String
+  campus_id         String?
+  title             String   // "Fee Defaulter 2nd Notice", "Rain Emergency Holiday"
+  category          String   // FEE_REMINDER | EMERGENCY | EXAM_NOTICE | HOLIDAY | PTM
+  bodyTemplate      String   // Contains {{tokens}}
+  defaultAudience   String   // ALL | STUDENTS | PARENTS | TEACHERS
+  isSystemPreseeded Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([college_id, title])
+  @@index([college_id, category])
+}
+
+model GuardianPushSubscription {
+  id        String   @id @default(uuid())
+  college_id String
+  studentId String
+  endpoint  String   @unique
+  p256dh    String   // Public encryption key
+  auth      String   // Auth secret
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([college_id, studentId])
+}
+
+// =============================================================
+// PHASE 12: CAMPUS OPERATIONS & AUXILIARY MODULES (N35 - N41)
+// =============================================================
+
+// 12A: N35 Library Management Module (Premium / Add-on on Standard)
+model BookTitle {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  isbn        String?
+  title       String
+  author      String
+  edition     String?
+  publisher   String?
+  category    String   // SCIENCES | LITERATURE | ISLAMIC | REFERENCE | TEXTBOOK
+  ddcClass    String?  // Dewey Decimal Classification
+  totalCopies Int      @default(1)
+  createdAt   DateTime @default(now())
+
+  copies      BookCopy[]
+  @@unique([college_id, title, author, edition])
+  @@index([college_id, category])
+}
+
+model BookCopy {
+  id              String    @id @default(uuid())
+  titleId         String
+  accessionNumber String
+  barcode         String
+  condition       String    @default("GOOD") // NEW | GOOD | WORN | DAMAGED | LOST
+  status          String    @default("AVAILABLE") // AVAILABLE | ISSUED | RESERVED | IN_REPAIR
+  addedAt         DateTime  @default(now())
+
+  title           BookTitle @relation(fields: [titleId], references: [id], onDelete: Cascade)
+  issues          BookIssueRecord[]
+  @@unique([titleId, accessionNumber])
+  @@unique([titleId, barcode])
+}
+
+model BookIssueRecord {
+  id            String    @id @default(uuid())
+  college_id    String
+  campus_id     String?
+  copyId        String
+  student_id    String?   // Issued to student OR staff
+  userId        String?
+  borrowerType  String    // STUDENT | STAFF
+  issuedAt      DateTime  @default(now())
+  dueDate       DateTime  @db.Date
+  returnedAt    DateTime?
+  fineAmountPkr Int       @default(0)
+  fineStatus    String    @default("NONE") // NONE | PENDING | PAID | WAIVED
+  issuedById    String
+
+  copy          BookCopy  @relation(fields: [copyId], references: [id])
+  @@index([college_id, student_id, returnedAt])
+  @@index([college_id, dueDate, returnedAt])
+}
+
+// 12B: N36 Transport Management Module (Enterprise / Add-on on Standard & Premium)
+model TransportRoute {
+  id             String   @id @default(uuid())
+  college_id     String
+  campus_id      String?
+  routeNumber    String   // "Route 4", "Gulberg Express"
+  description    String?
+  monthlyFarePkr Int
+  isActive       Boolean  @default(true)
+
+  stops          TransportStop[]
+  vehicles       TransportVehicle[]
+  allocations    StudentTransportAllocation[]
+  @@unique([college_id, routeNumber])
+}
+
+model TransportStop {
+  id          String   @id @default(uuid())
+  routeId     String
+  stopName    String   // "Kalma Chowk", "Main Market"
+  pickupTime  String   // "07:15"
+  dropTime    String   // "14:15"
+  stopOrder   Int
+
+  route       TransportRoute @relation(fields: [routeId], references: [id], onDelete: Cascade)
+  @@unique([routeId, stopOrder])
+}
+
+model TransportVehicle {
+  id                 String   @id @default(uuid())
+  routeId            String?
+  college_id         String
+  campus_id          String?
+  registrationNo     String   // "LEA-2024-890"
+  seatCapacity       Int
+  driverName         String
+  driverPhone        String
+  conductorName      String?
+  fitnessCertExpires DateTime? @db.Date
+  isActive           Boolean  @default(true)
+
+  route              TransportRoute? @relation(fields: [routeId], references: [id], onDelete: SetNull)
+  @@unique([college_id, registrationNo])
+}
+
+model StudentTransportAllocation {
+  id          String    @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  student_id  String
+  session_id  String
+  routeId     String
+  stopId      String
+  allocatedAt DateTime  @default(now())
+  isActive    Boolean   @default(true)
+
+  route       TransportRoute @relation(fields: [routeId], references: [id])
+  @@index([college_id, student_id, session_id, isActive])
+  @@index([routeId, isActive])
+}
+
+// 12C: N37 Hostel Management Module (Enterprise / Add-on on Standard & Premium)
+model HostelBuilding {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  name        String   // "Iqbal Hall (Boys)", "Fatima Jinnah Hall (Girls)"
+  gender      String   // MALE | FEMALE
+  wardenId    String   // Staff userId
+  totalRooms  Int
+  isActive    Boolean  @default(true)
+
+  rooms       HostelRoom[]
+  @@unique([college_id, name])
+}
+
+model HostelRoom {
+  id             String   @id @default(uuid())
+  buildingId     String
+  roomNumber     String   // "101", "204"
+  capacity       Int      @default(3) // Bed count
+  monthlyRentPkr Int
+  isActive       Boolean  @default(true)
+
+  building       HostelBuilding @relation(fields: [buildingId], references: [id], onDelete: Cascade)
+  allotments     StudentHostelAllotment[]
+  @@unique([buildingId, roomNumber])
+}
+
+model StudentHostelAllotment {
+  id          String    @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  student_id  String
+  session_id  String
+  roomId      String
+  bedNumber   Int
+  allottedAt  DateTime  @default(now())
+  vacatedAt   DateTime?
+  isActive    Boolean   @default(true)
+
+  room        HostelRoom @relation(fields: [roomId], references: [id])
+  @@index([roomId, bedNumber, isActive])
+  @@index([college_id, student_id, session_id, isActive])
+}
+
+model HostelNightAttendance {
+  id          String   @id @default(uuid())
+  college_id  String
+  buildingId  String
+  student_id  String
+  date        DateTime @db.Date
+  status      String   // PRESENT | ABSENT | HOME_PASS | NIGHT_OUT
+  markedById  String
+  remarks     String?
+  createdAt   DateTime @default(now())
+
+  @@unique([college_id, student_id, date])
+  @@index([buildingId, date, status])
+}
+
+// 12D: N38 Inventory & Fixed Asset Register (Premium Tier)
+model FixedAsset {
+  id               String    @id @default(uuid())
+  college_id       String
+  campus_id        String?
+  assetCode        String    // "AST-COMP-0042", "AST-GEN-01"
+  name             String
+  category         String    // COMPUTERS | LAB_EQUIPMENT | FURNITURE | VEHICLES | ELECTRICAL | HVAC
+  location         String    // "Computer Lab 2", "Chemistry Lab"
+  purchaseDate     DateTime  @db.Date
+  purchaseCostPkr  Int
+  salvageValuePkr  Int       @default(0)
+  usefulLifeYears  Int       @default(5)
+  currentValuePkr  Int
+  depreciationRate Float    // e.g. 20.0%
+  status           String    @default("IN_USE") // IN_USE | UNDER_REPAIR | WRITTEN_OFF | SOLD
+  serialNumber     String?
+  vendorId         String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  maintenanceLogs  AssetMaintenanceLog[]
+  @@unique([college_id, assetCode])
+  @@index([college_id, category, status])
+}
+
+model AssetMaintenanceLog {
+  id          String   @id @default(uuid())
+  assetId     String
+  college_id  String
+  serviceDate DateTime @db.Date
+  costPkr     Int      @default(0)
+  description String
+  servicedBy  String   // Vendor or in-house technician
+  createdAt   DateTime @default(now())
+
+  asset       FixedAsset @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  @@index([assetId, serviceDate])
+}
+
+// 12E: N39 Purchase Requests & Vendor Accounts Payable (Premium Tier)
+model Vendor {
+  id            String   @id @default(uuid())
+  college_id    String
+  name          String   // "Crown Scientific Supplies Lahore"
+  contactPerson String?
+  phone         String
+  ntnNumber     String?
+  bankName      String?
+  iban          String?
+  balancePkr    Int      @default(0) // Accounts payable balance
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+
+  purchaseOrders PurchaseOrder[]
+  @@unique([college_id, name])
+}
+
+model PurchaseOrder {
+  id              String    @id @default(uuid())
+  college_id      String
+  campus_id       String?
+  poNumber        String    // PO-YYYY-XXXXX
+  vendorId        String
+  status          String    @default("DRAFT") // DRAFT | APPROVED | ISSUED | RECEIVED | BILLED | CANCELLED
+  totalAmountPkr  Int
+  orderDate       DateTime  @db.Date
+  deliveryDueDate DateTime? @db.Date
+  createdById     String
+  approvedById    String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  vendor          Vendor    @relation(fields: [vendorId], references: [id])
+  items           PurchaseOrderItem[]
+  @@unique([college_id, poNumber])
+}
+
+model PurchaseOrderItem {
+  id           String @id @default(uuid())
+  poId         String
+  description  String // "Microscope Glass Slides (Box of 100)"
+  quantity     Int
+  unitPricePkr Int
+  totalPricePkr Int
+
+  po           PurchaseOrder @relation(fields: [poId], references: [id], onDelete: Cascade)
+}
+
+// 12F: N40 Double-Entry Accounting & General Ledger (Enterprise Tier)
+model AccountHead {
+  id           String   @id @default(uuid())
+  college_id   String
+  code         String   // "1010", "4010"
+  name         String   // "Cash in Hand", "Tuition Fee Revenue"
+  accountType  String   // ASSET | LIABILITY | EQUITY | REVENUE | EXPENSE
+  parentCode   String?
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+
+  journalLines JournalLineItem[]
+  @@unique([college_id, code])
+  @@index([college_id, accountType])
+}
+
+model JournalVoucher {
+  id          String   @id @default(uuid())
+  college_id  String
+  campus_id   String?
+  voucherNo   String   // JV-YYYY-XXXXX
+  voucherType String   // JV (Journal) | PV (Payment) | RV (Receipt)
+  voucherDate DateTime @db.Date
+  narration   String
+  status      String   @default("POSTED") // POSTED | VOIDED
+  createdById String
+  createdAt   DateTime @default(now())
+
+  lines       JournalLineItem[]
+  @@unique([college_id, voucherNo])
+  @@index([college_id, voucherDate])
+}
+
+model JournalLineItem {
+  id          String   @id @default(uuid())
+  voucherId   String
+  accountCode String
+  college_id  String
+  debitPkr    Int      @default(0)
+  creditPkr   Int      @default(0)
+  narration   String?
+
+  voucher     JournalVoucher @relation(fields: [voucherId], references: [id], onDelete: Cascade)
+  account     AccountHead    @relation(fields: [college_id, accountCode], references: [college_id, code])
+  @@index([college_id, accountCode])
+}
+
+// 12G: N41 Departmental Budgets & Cost Centres (Enterprise Tier)
+model DepartmentBudget {
+  id            String   @id @default(uuid())
+  college_id    String
+  campus_id     String?  // Absorbs N18 multi-campus budget allocation
+  fiscalYear    String   // "2026-2027"
+  department    String   // "Physics Dept", "Sports Dept", "Admin & IT"
+  allocatedPkr  Int
+  consumedPkr   Int      @default(0)
+  blockedPkr    Int      @default(0) // Committed in pending POs
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  allocations   BudgetExpenseCommitment[]
+  @@index([college_id, fiscalYear, department])
+  @@index([college_id, fiscalYear])
+}
+
+model BudgetExpenseCommitment {
+  id            String   @id @default(uuid())
+  budgetId      String
+  referenceType String   // PURCHASE_ORDER | REIMBURSEMENT
+  referenceId   String
+  amountPkr     Int
+  status        String   // COMMITTED | SETTLED | RELEASED
+  createdAt     DateTime @default(now())
+
+  budget        DepartmentBudget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+  @@index([budgetId, status])
+}
+
+// =============================================================
+// PHASE 13: AI ENGINES & AUTONOMOUS AUTOMATION (19 SERVICES)
+// =============================================================
+
+model TokenCostSample {
+  id             String   @id @default(uuid())
+  college_id     String
+  featureKey     String   // 'ai-tutor-chat', 'document-ocr', 'ask-your-data'
+  modelName      String   // 'gemini-1.5-flash', 'gemini-1.5-pro'
+  promptTokens   Int
+  outputTokens   Int
+  creditsDebited Int
+  latencyMs      Int
+  createdAt      DateTime @default(now())
+
+  @@index([featureKey, createdAt(sort: Desc)])
+  @@index([college_id, featureKey])
+}
+
+
+
+model KnowledgeBook {
+  id          String   @id @default(uuid())
+  college_id  String?  // NULL = platform shared textbook; Non-null = college custom notes
+  subject_id  String
+  class       String   // "FSc Part 1"
+  title       String   // "Physics Part 1 - Punjab Curriculum"
+  fileKey     String   // Stored in R2 (server-exempt)
+  status      String   @default("INDEXED") // PENDING | INDEXING | INDEXED | FAILED
+  totalChunks Int      @default(0)
+  createdAt   DateTime @default(now())
+
+  chunks      DocumentChunkVector[]
+  @@index([subject_id, class])
+  @@index([college_id])
+}
+
+model DocumentChunkVector {
+  id          String   @id @default(uuid())
+  bookId      String
+  chunkIndex  Int
+  chapterName String?
+  pageNumber  Int
+  chunkText   String
+  embedding   Unsupported("vector(768)")?
+
+  book        KnowledgeBook @relation(fields: [bookId], references: [id], onDelete: Cascade)
+  @@index([bookId, pageNumber])
+}
+
+model PendingAgentAction {
+  id           String    @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  actionType   String   // 'FEE_REMINDER_BROADCAST' | 'TEACHER_SUBSTITUTION' | 'ATTENDANCE_ANOMALY' | 'DEFENDER_SUMMON'
+  title        String
+  description  String
+  payloadJson  Json
+  status       String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | EXECUTED | DISMISSED
+  executedById String?
+  executedAt   DateTime?
+  createdAt    DateTime  @default(now())
+
+  @@index([college_id, status])
+  @@index([college_id, actionType])
+}
+
+model StudentTutorDailyUsage {
+  id            String   @id @default(uuid())
+  college_id    String
+  student_id    String
+  usageDate     String   // "YYYY-MM-DD"
+  messageCount  Int      @default(0)
+  lastMessageAt DateTime @default(now())
+
+  @@unique([college_id, student_id, usageDate])
+  @@index([college_id, usageDate])
+}
+
+model WeakTopicAnalysis {
+  id           String   @id @default(uuid())
+  college_id   String
+  campus_id    String?
+  subjectId    String
+  class        String
+  sectionId    String?
+  unitName     String
+  averageScore Float
+  masteryLevel String   // RED (<50%) | YELLOW (50-75%) | GREEN (>75%)
+  diagnosedAt  DateTime @default(now())
+
+  @@index([college_id, subjectId, class])
+}
+
+model StudentStudyPlan {
+  id          String   @id @default(uuid())
+  college_id  String
+  student_id  String
+  title       String
+  targetExam  String   // "BISE Final 2027", "MDCAT"
+  planJson    Json
+  createdAt   DateTime @default(now())
+
+  @@index([college_id, student_id])
+}
+
 
 
 

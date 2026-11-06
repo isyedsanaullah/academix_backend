@@ -177,6 +177,9 @@ app.use('/api/admissions', require('./routes/admissions.routes'));
 app.use('/api/leads', require('./routes/lead.routes'));
 app.use('/api/entry-test', require('./routes/entryTest.routes'));
 app.use('/api/guidance', require('./routes/guidance.routes'));
+app.use('/api/discipline', require('./routes/discipline.routes'));
+app.use('/api/clubs', require('./routes/clubs.routes'));
+app.use('/api/alumni', require('./routes/alumni.routes'));
 
 // LMS
 app.use('/api/assignments', require('./routes/assignment.routes'));
@@ -187,6 +190,9 @@ app.use('/api/universal-timetables', require('./routes/universalTimetable.routes
 app.use('/api/substitutions', require('./routes/substitution.routes'));
 app.use('/api/class-diary', require('./routes/classDiary.routes'));
 app.use('/api/academic-calendar', require('./routes/classDiary.routes'));
+app.use('/api/syllabus', require('./routes/syllabus.routes'));
+app.use('/api/live-classes', require('./routes/liveClasses.routes'));
+app.use('/api/forum', require('./routes/forum.routes'));
 app.use('/api/bulk-import', require('./routes/bulkImport.routes'));
 app.use('/api/exports', require('./routes/export.routes'));
 app.use('/api/custom-roles', require('./routes/customRole.routes'));
@@ -211,6 +217,7 @@ app.use('/api/executive', require('./routes/executiveKpi.routes'));
 
 // Communication & Security
 app.use('/api/announcements', require('./routes/announcement.routes'));
+app.use('/api/notice-templates', require('./routes/noticeTemplate.routes'));
 app.use('/api/notifications', require('./routes/notification.routes'));
 app.use('/api/certificates', require('./routes/certificate.routes'));
 app.use('/api/documents', require('./routes/document.routes'));
@@ -222,6 +229,15 @@ app.use('/api/trash', require('./routes/trash.routes'));
 // Visitor & Canteen
 app.use('/api/visitors', require('./routes/visitor.routes'));
 app.use('/api/canteen', require('./routes/canteen.routes'));
+
+// Phase 12 Operations & Auxiliary Routes
+app.use('/api/library', require('./routes/library.routes'));
+app.use('/api/transport', require('./routes/transport.routes'));
+app.use('/api/hostel', require('./routes/hostel.routes'));
+app.use('/api/inventory', require('./routes/inventory.routes'));
+app.use('/api/purchases', require('./routes/purchase.routes'));
+app.use('/api/accounting', require('./routes/accounting.routes'));
+app.use('/api/budgets', require('./routes/budget.routes'));
 
 // AI System & Reports
 app.use('/api/reports', require('./routes/report.routes'));
@@ -238,8 +254,9 @@ app.use('/api/health', require('./routes/health.routes'));
 app.use('/api/registrar', require('./routes/registrar.routes'));
 app.use('/api/accountant', require('./routes/accountant.routes'));
 
-// Leave & Fines
+// Leave & Fines & Clearance
 app.use('/api/leaves', require('./routes/leaveApplication.routes'));
+app.use('/api/clearance', require('./routes/clearance.routes'));
 app.use('/api/fines', require('./routes/fine.routes'));
 app.use('/api/gate', require('./routes/guard.routes'));
 app.use('/api/profile', require('./routes/profile.routes'));

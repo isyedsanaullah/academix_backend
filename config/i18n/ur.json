@@ -1,0 +1,21 @@
+{
+  "direction": "rtl",
+  "labels": {
+    "collegeName": "کالج کا نام",
+    "studentName": "طالب علم کا نام",
+    "rollNumber": "رول نمبر",
+    "class": "کلاس",
+    "section": "سیکشن",
+    "feeChallan": "فیس چالان",
+    "dueDate": "آخری تاریخ",
+    "totalAmount": "کل رقم",
+    "paidAmount": "ادا شدہ رقم",
+    "leavingCertificate": "کالج چھوڑنے کا سرٹیفکیٹ",
+    "characterCertificate": "کریکٹر سرٹیفکیٹ",
+    "reportCard": "تعلیمی کارکردگی رپورٹ کارڈ",
+    "attendance": "حاضری",
+    "status": "حیثیت",
+    "remarks": "آراء"
+  }
+}
+

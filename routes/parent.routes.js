@@ -20,5 +20,9 @@ router.get('/circulars', controller.getCirculars);
 router.get('/notifications', controller.getNotifications);
 router.post('/notifications/:id/read', controller.markNotificationRead);
 
+// N22: Parent Web Push Alerts
+router.post('/push/subscribe', controller.subscribePush);
+router.post('/push/send-test', controller.sendPushTest);
+
 module.exports = router;
 

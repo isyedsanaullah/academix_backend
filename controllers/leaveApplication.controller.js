@@ -1,3 +1,5 @@
+const studentLeaveService = require('../services/studentLeaveService');
+
 const getCurrentSessionId = async (tenantDb, collegeId) => {
   const session = await tenantDb.session.findFirst({
     where: { college_id: collegeId, isCurrent: true }
@@ -10,41 +12,43 @@ exports.applyLeave = async (req, res, next) => {
     const tenantDb = req.tenantClient;
     const userId = req.user?.id || req.user?._id;
 
-    const student = await tenantDb.student.findFirst({
-      where: { college_id: req.collegeId, user_id: userId }
-    });
-    if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
-    
-    const sessionId = await getCurrentSessionId(tenantDb, req.collegeId);
-    const { leaveDate, leaveDateEnd, reason, category, attachmentUrl } = req.body;
+    // Student can apply for themselves, or parent/teacher specifies studentId
+    let studentId = req.body.studentId;
+    if (!studentId) {
+      const student = await tenantDb.student.findFirst({
+        where: { college_id: req.collegeId, user_id: userId }
+      });
+      if (!student) return res.status(404).json({ success: false, message: 'Student profile not found' });
+      studentId = student.id;
+    }
+
+    const sessionId = req.body.sessionId || await getCurrentSessionId(tenantDb, req.collegeId);
+    const {
+      leaveDate,
+      leaveDateEnd,
+      reason,
+      category,
+      attachmentUrl,
+      isEmergency,
+      medicalCertificate,
+      appliedByRole
+    } = req.body;
 
     if (!leaveDate) return res.status(400).json({ success: false, message: 'Leave date is required' });
 
-    const targetLeaveDate = new Date(leaveDate);
-    targetLeaveDate.setHours(0, 0, 0, 0);
-
-    const existing = await tenantDb.leaveApplication.findFirst({
-      where: {
-        college_id: req.collegeId,
-        student_id: student.id,
-        leaveDate: targetLeaveDate,
-        status: { not: 'rejected' }
-      }
-    });
-    if (existing) return res.status(400).json({ success: false, message: 'Leave application already exists for this date' });
-
-    const app = await tenantDb.leaveApplication.create({
-      data: {
-        college_id: req.collegeId,
-        session_id: sessionId || '',
-        student_id: student.id,
-        user_id: userId,
-        leaveDate: targetLeaveDate,
-        leaveDateEnd: leaveDateEnd ? new Date(leaveDateEnd) : null,
-        reason,
-        category: category || 'personal',
-        attachmentUrl: attachmentUrl || ''
-      }
+    const app = await studentLeaveService.applyStudentLeave({
+      collegeId: req.collegeId,
+      campusId: req.campusId || null,
+      sessionId: sessionId || '',
+      studentId,
+      userId,
+      leaveDate,
+      leaveDateEnd,
+      reason,
+      category: category || 'personal',
+      isEmergency: Boolean(isEmergency),
+      medicalCertificate: medicalCertificate || attachmentUrl || null,
+      appliedByRole: appliedByRole || (req.user?.role === 'student' ? 'STUDENT' : 'GUARDIAN'),
     });
 
     res.status(201).json({ success: true, data: { ...app, _id: app.id } });
@@ -115,79 +119,33 @@ exports.getLeaveApplications = async (req, res, next) => {
 
 exports.reviewLeave = async (req, res, next) => {
   try {
-    const tenantDb = req.tenantClient;
     const { status, reviewRemarks } = req.body;
-    const userId = req.user?.id || req.user?._id || null;
-
     if (!['approved', 'rejected'].includes(status)) {
       return res.status(400).json({ success: false, message: 'Status must be approved or rejected' });
     }
 
-    const app = await tenantDb.leaveApplication.findFirst({
-      where: { id: req.params.id, college_id: req.collegeId }
-    });
-    if (!app) return res.status(404).json({ success: false, message: 'Leave application not found' });
-    if (app.status !== 'pending') return res.status(400).json({ success: false, message: 'Already reviewed' });
-
-    const updatedApp = await tenantDb.leaveApplication.update({
-      where: { id: req.params.id },
-      data: {
-        status,
-        reviewedBy: userId,
-        reviewedAt: new Date(),
-        reviewRemarks: reviewRemarks || ''
-      }
+    const result = await studentLeaveService.reviewStudentLeave({
+      collegeId: req.collegeId,
+      campusId: req.campusId || null,
+      leaveId: req.params.id,
+      reviewerUser: req.user,
+      status,
+      reviewRemarks,
     });
 
-    if (status === 'approved') {
-      const student = await tenantDb.student.findFirst({
-        where: { id: app.student_id },
-        select: { class: true, section: true }
+    if (result.requiresApproval) {
+      return res.status(202).json({
+        success: true,
+        data: { approvalRequestId: result.approvalRequestId, status: result.status },
+        message: result.message,
       });
-      const sessionId = app.session_id;
-      const startDate = new Date(app.leaveDate);
-      const endDate = app.leaveDateEnd ? new Date(app.leaveDateEnd) : startDate;
-      const current = new Date(startDate);
-
-      while (current <= endDate) {
-        const dayStart = new Date(current);
-        dayStart.setHours(0, 0, 0, 0);
-
-        await tenantDb.attendance.upsert({
-          where: {
-            college_id_session_id_student_id_date: {
-              college_id: req.collegeId,
-              session_id: sessionId,
-              student_id: app.student_id,
-              date: dayStart
-            }
-          },
-          update: {
-            status: 'leave',
-            method: 'manual',
-            markedBy: userId,
-            remarks: `Leave: ${app.reason}`,
-            class: student?.class,
-            section: student?.section
-          },
-          create: {
-            college_id: req.collegeId,
-            session_id: sessionId,
-            student_id: app.student_id,
-            date: dayStart,
-            status: 'leave',
-            method: 'manual',
-            markedBy: userId,
-            remarks: `Leave: ${app.reason}`,
-            class: student?.class,
-            section: student?.section
-          }
-        });
-        current.setDate(current.getDate() + 1);
-      }
     }
 
-    res.json({ success: true, data: { ...updatedApp, _id: updatedApp.id }, message: `Leave ${status}` });
+    res.json({
+      success: true,
+      data: { ...result.leave, _id: result.leave.id },
+      message: result.message,
+    });
   } catch (error) { next(error); }
 };
 

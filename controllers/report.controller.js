@@ -654,3 +654,55 @@ exports.getBatchStudentReportPDF = async (req, res, next) => {
     doc.end();
   } catch (error) { next(error); }
 };
+
+// --- N28: Digital Report Card & Remarks ---
+const reportCardService = require('../services/reportCardService');
+
+exports.upsertRemarks = async (req, res) => {
+  try {
+    const remark = await reportCardService.upsertRemarks({
+      collegeId: req.collegeId,
+      campusId: req.campusId || null,
+      studentId: req.body.studentId,
+      sessionId: req.body.sessionId,
+      examId: req.body.examId,
+      classTeacherId: req.user.id,
+      remarks: req.body.remarks,
+      conductRating: req.body.conductRating,
+      punctuality: req.body.punctuality,
+      boardReadiness: req.body.boardReadiness,
+      isPublished: req.body.isPublished,
+    });
+    return res.status(200).json({ success: true, data: remark });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, error: err.message, code: err.code });
+  }
+};
+
+exports.getReportCardData = async (req, res) => {
+  try {
+    const cardData = await reportCardService.getReportCardData({
+      collegeId: req.collegeId,
+      studentId: req.params.studentId,
+      examId: req.params.examId,
+    });
+    return res.json({ success: true, data: cardData });
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, error: err.message, code: err.code });
+  }
+};
+
+exports.getReportCardPdf = async (req, res) => {
+  try {
+    const pdfResult = await reportCardService.generateReportCardPdf({
+      collegeId: req.collegeId,
+      studentId: req.params.studentId,
+      examId: req.params.examId,
+    });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="ReportCard_${req.params.studentId}_${req.params.examId}.pdf"`);
+    return res.send(pdfResult.buffer);
+  } catch (err) {
+    return res.status(err.statusCode || 500).json({ success: false, error: err.message, code: err.code });
+  }
+};

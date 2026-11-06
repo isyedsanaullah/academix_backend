@@ -1,0 +1,21 @@
+{
+  "direction": "ltr",
+  "labels": {
+    "collegeName": "College Name",
+    "studentName": "Student Name",
+    "rollNumber": "Roll Number",
+    "class": "Class",
+    "section": "Section",
+    "feeChallan": "Fee Challan",
+    "dueDate": "Due Date",
+    "totalAmount": "Total Amount",
+    "paidAmount": "Paid Amount",
+    "leavingCertificate": "College Leaving Certificate",
+    "characterCertificate": "Character Certificate",
+    "reportCard": "Terminal Progress Report Card",
+    "attendance": "Attendance",
+    "status": "Status",
+    "remarks": "Remarks"
+  }
+}
+

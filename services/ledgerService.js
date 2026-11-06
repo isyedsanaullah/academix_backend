@@ -24,13 +24,12 @@ async function ensureMonthlyGrant(collegeId, tx = null) {
 
   // 1. Message Credits Grant (if included in plan)
   if (limits.messageCreditsMonthly > 0) {
-    const existingMsgGrant = await prisma.messageCreditLedgerEntry.findUnique({
+    const existingMsgGrant = await prisma.messageCreditLedgerEntry.findFirst({
       where: {
-        college_id_bucket_periodKey: {
-          college_id: collegeId,
-          bucket: 'PLAN',
-          periodKey: currentPeriodKey
-        }
+        college_id: collegeId,
+        bucket: 'PLAN',
+        periodKey: currentPeriodKey,
+        type: 'MONTHLY_GRANT'
       }
     });
 
@@ -51,13 +50,12 @@ async function ensureMonthlyGrant(collegeId, tx = null) {
 
   // 2. AI Credits Grant (if included in plan)
   if (limits.aiCreditsMonthly > 0) {
-    const existingAIGrant = await prisma.aICreditLedgerEntry.findUnique({
+    const existingAIGrant = await prisma.aICreditLedgerEntry.findFirst({
       where: {
-        college_id_bucket_periodKey: {
-          college_id: collegeId,
-          bucket: 'PLAN',
-          periodKey: currentPeriodKey
-        }
+        college_id: collegeId,
+        bucket: 'PLAN',
+        periodKey: currentPeriodKey,
+        type: 'MONTHLY_GRANT'
       }
     });
 

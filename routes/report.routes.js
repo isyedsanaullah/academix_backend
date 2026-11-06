@@ -4,7 +4,10 @@ const {
   previewReport,
   generatePDF,
   getStudentReportPDF,
-  getBatchStudentReportPDF
+  getBatchStudentReportPDF,
+  upsertRemarks,
+  getReportCardPdf,
+  getReportCardData,
 } = require('../controllers/report.controller');
 const protect = require('../middleware/auth');
 const authorize = require('../middleware/rbac');
@@ -22,6 +25,11 @@ router.post('/student-batch', featureGate('student-reports'), authorize('admin',
 // General Analytics Reports (feature 'analytics-reports')
 router.get('/preview', featureGate('analytics-reports'), authorize('admin', 'principal'), previewReport);
 router.post('/generate-pdf', featureGate('analytics-reports'), authorize('admin', 'principal'), generatePDF);
+
+// N28: Digital Report Card with Teacher Remarks
+router.post('/cards/remarks', featureGate('digital-report-card-remarks'), authorize('admin', 'principal', 'teacher'), upsertRemarks);
+router.get('/cards/:studentId/:examId/pdf', featureGate('digital-report-card-remarks'), authorize('admin', 'principal', 'teacher', 'student'), getReportCardPdf);
+router.get('/cards/:studentId/:examId', featureGate('digital-report-card-remarks'), authorize('admin', 'principal', 'teacher', 'student'), getReportCardData);
 
 router.meta = {
   feature: 'analytics-reports'

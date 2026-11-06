@@ -84,27 +84,89 @@ const workflowHandlers = {
     }
   },
 
+  STUDENT_LEAVE: {
+    async validate(payload, tx) {
+      if (!payload || !payload.leaveId) {
+        throw new Error('STUDENT_LEAVE requires leaveId');
+      }
+      const leave = await tx.leaveApplication.findUnique({ where: { id: payload.leaveId } });
+      if (!leave) throw new Error(`Student leave with ID ${payload.leaveId} not found`);
+      return true;
+    },
+    async execute(tx, payload) {
+      const { executeLeaveApprovalCore } = require('./studentLeaveService');
+      return await executeLeaveApprovalCore(tx, payload.leaveId, payload.reviewerId, payload.reviewRemarks);
+    }
+  },
+
   MARKS_EDIT: {
     async validate(payload, tx) {
-      if (!payload || !payload.studentId || payload.marksObtained === undefined) {
-        throw new Error('MARKS_EDIT requires studentId and marksObtained');
+      if (!payload || (!payload.studentId && !payload.resultId)) {
+        throw new Error('MARKS_EDIT requires studentId or resultId');
       }
       return true;
     },
     async execute(tx, payload) {
-      // If ExamResult exists, update; or record audit
-      return { success: true, marksUpdated: payload.marksObtained };
+      if (payload.resultId && payload.revisedMarks !== undefined) {
+        const result = await tx.result.findUnique({ where: { id: payload.resultId } });
+        if (result) {
+          let updatedMarks = typeof result.marks === 'object' && result.marks !== null ? { ...result.marks } : {};
+          const subjectKey = payload.subjectId || payload.subject || 'score';
+          updatedMarks[subjectKey] = Number(payload.revisedMarks);
+
+          let totalObtained = 0;
+          let count = 0;
+          for (const v of Object.values(updatedMarks)) {
+            const num = Number(v);
+            if (!isNaN(num)) {
+              totalObtained += num;
+              count++;
+            }
+          }
+          const totalMarks = result.totalMarks || (count * 100);
+          const percentage = totalMarks > 0 ? (totalObtained / totalMarks) * 100 : 0;
+
+          await tx.result.update({
+            where: { id: payload.resultId },
+            data: {
+              marks: updatedMarks,
+              totalObtained,
+              percentage,
+            }
+          });
+        }
+        if (payload.recheckRequestId) {
+          await tx.resultRecheckRequest.update({
+            where: { id: payload.recheckRequestId },
+            data: {
+              status: 'RESOLVED_CHANGED',
+              revisedMarks: payload.revisedMarks,
+              resolvedAt: new Date(),
+            }
+          });
+        }
+      }
+      return { success: true, marksUpdated: payload.revisedMarks || payload.marksObtained };
     }
   },
 
   PURCHASE_ORDER: {
     async validate(payload, tx) {
-      if (!payload || !payload.amount) {
-        throw new Error('PURCHASE_ORDER requires amount');
+      if (!payload || (!payload.amount && !payload.poId)) {
+        throw new Error('PURCHASE_ORDER requires amount or poId');
       }
       return true;
     },
     async execute(tx, payload) {
+      if (payload.poId) {
+        await tx.purchaseOrder.update({
+          where: { id: payload.poId },
+          data: {
+            status: 'APPROVED',
+            approvedById: payload.approverId || null,
+          },
+        });
+      }
       return { success: true, poApproved: true, amount: payload.amount };
     }
   },

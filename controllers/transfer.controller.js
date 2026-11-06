@@ -7,12 +7,13 @@ const transferService = require('../services/transferService');
 async function transferStudent(req, res) {
   try {
     const collegeId = req.user.college_id;
-    const { studentId, toSectionId, reason } = req.body;
+    const { studentId, toSectionId, toCampusId, reason } = req.body;
 
     const result = await transferService.initiateTransfer({
       collegeId,
       studentId,
       toSectionId,
+      toCampusId,
       reason,
       actorUserId: req.user.id
     });

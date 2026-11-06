@@ -532,3 +532,48 @@ exports.getSessions = async (req, res, next) => {
     next(error);
   }
 };
+
+// --- N22: Parent App Web Push Delivery ---
+const guardianPushService = require('../services/guardianPushService');
+
+exports.subscribePush = async (req, res, next) => {
+  try {
+    const studentId = req.guardianSession?.student_id || req.body.studentId;
+    const { endpoint, p256dh, auth, userAgent } = req.body;
+
+    if (!endpoint || !p256dh || !auth) {
+      return res.status(400).json({ success: false, message: 'endpoint, p256dh, and auth keys are required' });
+    }
+
+    const sub = await guardianPushService.saveSubscription({
+      collegeId: req.collegeId,
+      studentId,
+      endpoint,
+      p256dh,
+      auth,
+      userAgent: userAgent || req.headers['user-agent'],
+    });
+
+    res.status(201).json({ success: true, data: sub });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.sendPushTest = async (req, res, next) => {
+  try {
+    const studentId = req.guardianSession?.student_id || req.body.studentId;
+    const { title, body } = req.body;
+
+    const result = await guardianPushService.sendPushNotification({
+      collegeId: req.collegeId,
+      studentId,
+      title: title || 'Test Notification',
+      body: body || 'Test Push Alert Body',
+    });
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+};

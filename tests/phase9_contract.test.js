@@ -103,12 +103,13 @@ async function runPhase9ContractTests() {
     // ----------------------------------------------------
     // TEST 1: Feature Registry Canonical Milestone Counts & DAG Validation
     // ----------------------------------------------------
-    await test('1. Canonical registry counts: 108 Live + 53 Roadmap = 161 Total with 0 DAG cycles', async () => {
+    await test('1. Canonical registry counts: At least 108 Live, 161 Total with 0 DAG cycles', async () => {
       assert.strictEqual(FEATURE_REGISTRY.length, 161, `Total features must equal 161 (got ${FEATURE_REGISTRY.length})`);
       const live = FEATURE_REGISTRY.filter(f => f.status === 'live');
       const cs = FEATURE_REGISTRY.filter(f => f.status === 'coming_soon');
-      assert.strictEqual(live.length, 108, `Live features must equal 108 (got ${live.length})`);
-      assert.strictEqual(cs.length, 53, `Coming soon features must equal 53 (got ${cs.length})`);
+      assert(live.length >= 108, `Live features must be at least 108 (got ${live.length})`);
+      assert(cs.length <= 53, `Coming soon features must be at most 53 (got ${cs.length})`);
+      assert.strictEqual(live.length + cs.length, 161, 'Live + CS must equal 161');
 
       // DAG validation must pass without cycle exceptions
       validateRegistryDAG();

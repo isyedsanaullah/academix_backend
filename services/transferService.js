@@ -8,7 +8,7 @@ const { checkAndCreateApprovalRequest } = require('./approvalService');
  * ledgers, files, attendance are preserved untouched; zero quota consumption.
  */
 async function executeTransferCore(tx, payload, { dryRun = false } = {}) {
-  const { collegeId, studentId, toSectionId, reason, actorUserId } = payload;
+  const { collegeId, studentId, toSectionId, toCampusId: explicitToCampusId, reason, actorUserId } = payload;
 
   if (!collegeId || !studentId || !toSectionId) {
     const err = new Error('collegeId, studentId, and toSectionId are strictly required for campus transfer');
@@ -74,6 +74,12 @@ async function executeTransferCore(tx, payload, { dryRun = false } = {}) {
   }
 
   const toCampusId = toSection.campus_id;
+  if (explicitToCampusId && explicitToCampusId !== toCampusId) {
+    const err = new Error('Destination section does not belong to destination campus');
+    err.statusCode = 422;
+    err.code = 'SECTION_CAMPUS_MISMATCH';
+    throw err;
+  }
 
   // Verify destination campus exists and is active
   const destinationCampus = await tx.campus.findFirst({
@@ -149,7 +155,7 @@ async function executeTransferCore(tx, payload, { dryRun = false } = {}) {
  * - If active chain for CAMPUS_TRANSFER exists -> returns 202 with approvalRequestId
  * - If no chain exists -> executes immediately inside single transaction
  */
-async function initiateTransfer({ collegeId, studentId, toSectionId, reason, actorUserId }) {
+async function initiateTransfer({ collegeId, studentId, toSectionId, toCampusId, reason, actorUserId }) {
   const prisma = getSystemClient();
 
   // Pre-flight validation of existence
@@ -159,6 +165,13 @@ async function initiateTransfer({ collegeId, studentId, toSectionId, reason, act
   if (!toSection) {
     const err = new Error('Destination section not found');
     err.statusCode = 404;
+    throw err;
+  }
+
+  if (toCampusId && toSection.campus_id !== toCampusId) {
+    const err = new Error('Destination section does not belong to destination campus');
+    err.statusCode = 422;
+    err.code = 'SECTION_CAMPUS_MISMATCH';
     throw err;
   }
 
@@ -172,6 +185,7 @@ async function initiateTransfer({ collegeId, studentId, toSectionId, reason, act
       collegeId,
       studentId,
       toSectionId,
+      toCampusId,
       reason,
       actorUserId
     }
@@ -192,6 +206,7 @@ async function initiateTransfer({ collegeId, studentId, toSectionId, reason, act
       collegeId,
       studentId,
       toSectionId,
+      toCampusId,
       reason,
       actorUserId
     }, { dryRun: false });

@@ -55,11 +55,11 @@ async function runTests() {
     assert.strictEqual(FEATURE_REGISTRY.length, 161, `Expected 161 services, got ${FEATURE_REGISTRY.length}`);
   });
 
-  test('Registry has canonical milestone live and coming_soon services (Post-Phase 10: 114 live, 47 coming_soon)', () => {
+  test('Registry has canonical milestone live and coming_soon services (Post-Phase 13: 155 live, 6 coming_soon)', () => {
     const live = FEATURE_REGISTRY.filter(f => f.status === 'live').length;
     const comingSoon = FEATURE_REGISTRY.filter(f => f.status === 'coming_soon').length;
-    assert.strictEqual(live, 114, `Expected 114 live services post-Phase 10, got ${live}`);
-    assert.strictEqual(comingSoon, 47, `Expected 47 coming_soon services post-Phase 10, got ${comingSoon}`);
+    assert.strictEqual(live, 155, `Expected 155 live services post-Phase 13, got ${live}`);
+    assert.strictEqual(comingSoon, 6, `Expected 6 coming_soon services post-Phase 13, got ${comingSoon}`);
   });
 
   test('Tier starting counts strictly match: Starter=33, Standard=55, Premium=53, Enterprise=20', () => {
@@ -275,6 +275,7 @@ async function runTests() {
   if (failed > 0) {
     process.exit(1);
   }
+  process.exit(0);
 }
 
 runTests().catch(err => {
