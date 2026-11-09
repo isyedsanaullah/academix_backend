@@ -1,6 +1,6 @@
 const { getSystemClient } = require('../config/prismaManager');
-const { PLAN_FEATURES, PLAN_LEVEL, normalizePlanId } = require('../config/planConstants');
-const { resolveCollegeFeatures } = require('../config/featureRegistry');
+const { PLAN_LEVEL, normalizePlanId } = require('../config/planConstants');
+const { resolveCollegeFeatures, PLAN_FEATURES } = require('../config/featureRegistry');
 
 /**
  * Plan & Feature Gate Middleware

@@ -1,7 +1,7 @@
 const prismaManager = require('../config/prismaManager');
 const getSystemClient = () => prismaManager.getSystemClient();
 const planGate = require('../middleware/planGate');
-const { resolveCollegeFeatures, FEATURE_REGISTRY } = require('../config/featureRegistry');
+const { resolveCollegeFeatures, FEATURE_REGISTRY, PLAN_FEATURES } = require('../config/featureRegistry');
 const { logActivity } = require('../services/activityLog.service');
 const { clearEntitlementCache, getFeatureFlags } = require('../middleware/loadEntitlements');
 const { FEATURES } = require('../services/capabilityCatalog');
@@ -592,10 +592,10 @@ exports.updateCollegePlan = async (req, res, next) => {
       return res.status(404).json({ success: false, message: 'College not found' });
     }
 
-    const sub = { ...(typeof college.subscription === 'object' ? college.subscription : {}) };
-    const oldPlan = sub.plan;
+    const sub = { ...(typeof college.subscription === 'object' && college.subscription !== null ? college.subscription : {}) };
+    const oldPlan = sub.plan || college.planId;
     sub.plan = plan;
-    sub.features = planGate.PLAN_FEATURES[plan] || [];
+    sub.features = (PLAN_FEATURES && PLAN_FEATURES[plan]) || (planGate.PLAN_FEATURES && planGate.PLAN_FEATURES[plan]) || [];
     sub.startedAt = new Date();
 
     let isActiveUpdate = college.isActive;
@@ -610,6 +610,7 @@ exports.updateCollegePlan = async (req, res, next) => {
     const updatedCollege = await prisma.college.update({
       where: { id: req.params.id },
       data: {
+        planId: plan,
         subscription: sub,
         isActive: isActiveUpdate
       }

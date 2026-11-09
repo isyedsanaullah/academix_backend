@@ -83,7 +83,7 @@ exports.getOverview = async (req, res, next) => {
     // Daily logins in JS
     const usersForDailyLogins = await prisma.user.findMany({
       where: { lastLogin: { gte: thirtyDaysAgo } },
-      select: { lastLogin: true }
+      select: { lastLogin: true, role: true }
     });
     const dailyLoginsMap = {};
     for (const u of usersForDailyLogins) {
@@ -94,9 +94,11 @@ exports.getOverview = async (req, res, next) => {
       const day = d.getDate();
       const key = `${year}-${month}-${day}`;
       if (!dailyLoginsMap[key]) {
-        dailyLoginsMap[key] = { _id: { year, month, day }, count: 0 };
+        dailyLoginsMap[key] = { _id: { year, month, day }, count: 0, roles: {} };
       }
       dailyLoginsMap[key].count++;
+      const roleKey = u.role || 'student';
+      dailyLoginsMap[key].roles[roleKey] = (dailyLoginsMap[key].roles[roleKey] || 0) + 1;
     }
     const dailyLoginsData = Object.values(dailyLoginsMap).sort(
       (a, b) => a._id.year - b._id.year || a._id.month - b._id.month || a._id.day - b._id.day
@@ -111,7 +113,8 @@ exports.getOverview = async (req, res, next) => {
     }));
     const formatDaily = (data) => data.map(d => ({
       label: `${d._id.day}/${d._id.month}`,
-      count: d.count
+      count: d.count,
+      roles: d.roles
     }));
 
     const totalStudents = await prisma.user.count({ where: { role: 'student' } });
