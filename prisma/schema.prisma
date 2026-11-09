@@ -590,8 +590,12 @@ model College {
   // Phase 10: Infrastructure, Multi-Campus & Compliance
   ipAllowlistMode          String?  @default("OFF") // OFF | LOG_ONLY | ENFORCE
 
+  isTest                   Boolean  @default(false)
+
   @@index([status])
   @@index([subscription(path: "status")])
+  @@index([planId, subStatus])
+  @@index([isTest])
 }
 
 model CollegeInvite {
@@ -2360,6 +2364,11 @@ model CollegeSubscriptionPayment {
   @@index([college_id, status])
   @@index([status])
   @@index([isDuplicateSuspected])
+  @@index([createdAt(sort: Desc)])
+  @@index([status, reviewedAt(sort: Desc)])
+  @@index([college_id, createdAt(sort: Desc)])
+  @@index([paymentMethod])
+  @@index([planId])
 }
 
 model MessageCreditLedgerEntry {

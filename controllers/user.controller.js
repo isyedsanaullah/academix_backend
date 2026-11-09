@@ -1,5 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { getSystemClient } = require('../config/prismaManager');
+const { SAFE_USER_SELECT, sanitizeUserResponse } = require('../utils/safeUser');
 
 const CREATABLE_ROLES = ['registrar', 'accountant', 'principal', 'teacher', 'employee'];
 
@@ -37,6 +38,7 @@ exports.getUsers = async (req, res, next) => {
     const totalUsers = await prisma.user.count({ where });
     const users = await prisma.user.findMany({
       where,
+      select: SAFE_USER_SELECT,
       orderBy: [
         { role: 'asc' },
         { createdAt: 'desc' }
@@ -67,7 +69,8 @@ exports.getUserById = async (req, res, next) => {
   try {
     const prisma = getSystemClient();
     const user = await prisma.user.findFirst({
-      where: { id: req.params.id, college_id: req.collegeId }
+      where: { id: req.params.id, college_id: req.collegeId },
+      select: SAFE_USER_SELECT
     });
     if (!user) return res.status(404).json({ success: false, message: 'User not found' });
     
@@ -233,15 +236,15 @@ exports.updateUser = async (req, res, next) => {
     }
     
     const finalUser = await prisma.user.findUnique({
-      where: { id: user.id }
+      where: { id: user.id },
+      select: SAFE_USER_SELECT
     });
 
-    const mergedUser = {
+    const mergedUser = sanitizeUserResponse({
       ...finalUser,
-      _id: finalUser.id,
+      _id: finalUser?.id,
       ...profileData
-    };
-    delete mergedUser.password;
+    });
     
     res.json({ success: true, data: mergedUser, message: 'Account updated successfully' });
   } catch (error) { next(error); }
@@ -305,11 +308,10 @@ exports.createUser = async (req, res, next) => {
       });
     }
 
-    const userOut = {
+    const userOut = sanitizeUserResponse({
       ...user,
       _id: user.id
-    };
-    delete userOut.password;
+    });
     res.status(201).json({ success: true, data: userOut, message: `${role} account created successfully` });
   } catch (error) { next(error); }
 };

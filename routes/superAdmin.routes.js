@@ -118,6 +118,10 @@ const signatureUpload = multer({
 });
 router.post('/branding/signature', signatureUpload.single('signature'), uploadPlatformSignature);
 
+// ---- Superadmin Finance Module ----
+const financeRoutes = require('../modules/superAdminFinance/finance.routes');
+router.use('/finance', financeRoutes);
+
 // ---- Phase 6A: Billing Settlement Queue ----
 const {
   getPendingPayments,
