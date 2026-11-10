@@ -23,7 +23,13 @@ async function getPaymentsList(filters = {}) {
   const sortBy = validSortFields.includes(filters.sortBy) ? filters.sortBy : 'createdAt';
   const sortOrder = filters.sortOrder === 'asc' ? 'asc' : 'desc';
 
-  const [payments, total, statusAggregates] = await Promise.all([
+  // Summary aggregation: does not filter by status so all 4 status cards preserve their totals
+  const summaryWhere = buildPaymentWhere({
+    ...filters,
+    status: undefined
+  });
+
+  const [payments, total, statusAggregates, totalSummaryCount] = await Promise.all([
     prisma.collegeSubscriptionPayment.findMany({
       where,
       select: {
@@ -63,14 +69,15 @@ async function getPaymentsList(filters = {}) {
     prisma.collegeSubscriptionPayment.count({ where }),
     prisma.collegeSubscriptionPayment.groupBy({
       by: ['status'],
-      where,
+      where: summaryWhere,
       _count: { id: true },
       _sum: { amountPaid: true, verifiedAmount: true }
-    })
+    }),
+    prisma.collegeSubscriptionPayment.count({ where: summaryWhere })
   ]);
 
   const summary = {
-    totalCount: total,
+    totalCount: totalSummaryCount,
     approvedCount: 0,
     pendingCount: 0,
     rejectedCount: 0,

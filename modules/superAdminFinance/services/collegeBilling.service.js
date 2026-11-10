@@ -58,7 +58,26 @@ async function getCollegeBillingList(filters = {}) {
 
   const where = andConditions.length > 0 ? { AND: andConditions } : {};
 
-  const [colleges, total] = await Promise.all([
+  // Summary aggregation: does not filter by subStatus so stats cards preserve their accurate counts
+  const summaryAndConditions = [];
+  if (!filters.includeTest) {
+    summaryAndConditions.push({ isTest: false });
+  }
+  if (filters.planId && filters.planId !== 'ALL') {
+    summaryAndConditions.push({ planId: normalizePlanId(filters.planId) });
+  }
+  if (filters.q) {
+    const qTerm = String(filters.q).trim();
+    summaryAndConditions.push({
+      OR: [
+        { name: { contains: qTerm, mode: 'insensitive' } },
+        { code: { contains: qTerm, mode: 'insensitive' } }
+      ]
+    });
+  }
+  const summaryWhere = summaryAndConditions.length > 0 ? { AND: summaryAndConditions } : {};
+
+  const [colleges, total, statusAggregates, totalSummaryCount] = await Promise.all([
     prisma.college.findMany({
       where,
       select: {
@@ -89,8 +108,33 @@ async function getCollegeBillingList(filters = {}) {
       skip,
       take: limit
     }),
-    prisma.college.count({ where })
+    prisma.college.count({ where }),
+    prisma.college.groupBy({
+      by: ['subStatus'],
+      where: summaryWhere,
+      _count: { id: true }
+    }),
+    prisma.college.count({ where: summaryWhere })
   ]);
+
+  const summary = {
+    total: totalSummaryCount,
+    active: 0,
+    trial: 0,
+    expired: 0
+  };
+
+  for (const agg of statusAggregates) {
+    const s = String(agg.subStatus || '').toUpperCase();
+    const count = agg._count.id;
+    if (s === 'ACTIVE') {
+      summary.active += count;
+    } else if (s === 'TRIAL') {
+      summary.trial += count;
+    } else if (s === 'EXPIRED' || s === 'SUSPENDED') {
+      summary.expired += count;
+    }
+  }
 
   const enrichedColleges = colleges.map(c => {
     const normPlan = normalizePlanId(c.planId);
@@ -125,6 +169,7 @@ async function getCollegeBillingList(filters = {}) {
 
   return {
     colleges: enrichedColleges,
+    summary,
     pagination: {
       page,
       limit,
