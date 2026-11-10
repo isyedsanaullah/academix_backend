@@ -2,6 +2,7 @@
 // Prisma Client refreshed for Announcement status schema
 const express = require('express');
 const cors = require('cors');
+const compression = require('compression');
 const morgan = require('morgan');
 const path = require('path');
 // Server startup trigger: updated prisma client bindings
@@ -118,6 +119,9 @@ app.use(cors({
     'X-Expected-College-Id'
   ]
 }));
+// Enable Gzip/Brotli response compression for all responses > 1KB
+app.use(compression({ threshold: 1024 }));
+
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 

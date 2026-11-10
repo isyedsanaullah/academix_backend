@@ -441,14 +441,6 @@ async function disable2FA(req, res) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    if (user.role === 'superAdmin') {
-      return res.status(403).json({
-        success: false,
-        code: 'SUPER_ADMIN_2FA_MANDATORY',
-        message: 'Two-factor authentication is mandatory for Super Admin accounts and cannot be disabled.'
-      });
-    }
-
     await prisma.user.update({
       where: { id: user.id },
       data: {

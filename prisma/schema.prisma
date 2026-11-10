@@ -596,6 +596,8 @@ model College {
   @@index([subscription(path: "status")])
   @@index([planId, subStatus])
   @@index([isTest])
+  @@index([createdAt(sort: Desc)])
+  @@index([isActive, totalStudents(sort: Desc)])
 }
 
 model CollegeInvite {
@@ -672,6 +674,8 @@ model CollegeInvitation {
 
   @@index([email])
   @@index([status])
+  @@index([status, expiresAt])
+  @@index([createdAt(sort: Desc)])
   @@index([token])
 }
 
@@ -1047,6 +1051,7 @@ model PlatformInvoice {
   updatedAt     DateTime  @updatedAt
 
   @@index([college_id, status])
+  @@index([createdAt(sort: Desc)])
 }
 
 model VerifyToken {
@@ -1577,8 +1582,9 @@ model SubscriptionRequest {
   events           SubscriptionRequestEvent[]
 
   @@index([status])
+  @@index([selectedPlan, status])
   @@index([adminEmail])
-  @@index([createdAt])
+  @@index([createdAt(sort: Desc)])
 }
 
 model SubscriptionRequestEvent {

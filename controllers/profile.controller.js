@@ -118,6 +118,8 @@ exports.getProfile = async (req, res, next) => {
         avatar: resolvedAvatar || user.avatar,
         authProvider: user.authProvider || 'local',
         emailVerified: user.emailVerified || false,
+        totpEnabled: user.totpEnabled || false,
+        twofaEnrolledAt: user.twofaEnrolledAt || null,
         qrCode: user.qrCode || '',
         createdAt: user.createdAt,
         lastLogin: user.lastLogin,

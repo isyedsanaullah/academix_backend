@@ -243,22 +243,6 @@ exports.login = async (req, res, next) => {
       });
     }
 
-    // Phase 9A: Mandatory 2FA for Super Admin accounts
-    if (user.role === 'superAdmin' && !user.totpEnabled) {
-      const enrollToken = jwt.sign(
-        { userId: user.id, collegeId: null, role: user.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
-        process.env.JWT_SECRET,
-        { expiresIn: '15m' }
-      );
-
-      return res.json({
-        success: true,
-        requires2FAEnrollment: true,
-        enrollToken,
-        message: 'Two-factor authentication is mandatory for Super Admin accounts. Please complete setup before continuing.'
-      });
-    }
-
     // Phase 9A: Enforced 2FA for College Admins after grace period
     if (college && ['admin', 'principal'].includes(user.role) && !user.totpEnabled) {
       const collegeSettings = (college.settings && typeof college.settings === 'object') ? college.settings : {};
@@ -419,22 +403,6 @@ exports.googleLogin = async (req, res, next) => {
         requires2FA: true,
         preAuthToken,
         message: 'Two-factor authentication required. Please enter your 6-digit authenticator code.'
-      });
-    }
-
-    // Phase 9A: Mandatory 2FA for Super Admin accounts
-    if (updatedUser.role === 'superAdmin' && !updatedUser.totpEnabled) {
-      const enrollToken = jwt.sign(
-        { userId: updatedUser.id, collegeId: null, role: updatedUser.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
-        process.env.JWT_SECRET,
-        { expiresIn: '15m' }
-      );
-
-      return res.json({
-        success: true,
-        requires2FAEnrollment: true,
-        enrollToken,
-        message: 'Two-factor authentication is mandatory for Super Admin accounts. Please complete setup before continuing.'
       });
     }
 

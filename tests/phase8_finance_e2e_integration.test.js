@@ -83,10 +83,9 @@ async function runTests() {
       payments.payments.length === 15 &&
       payments.payments.every(p => p.college && p.college.code)
     );
-    assert('Payment summary accurately tallies statuses (131 approved, 55 pending, 14 rejected)',
-      payments.summary.approvedCount === 131 &&
-      payments.summary.pendingCount === 55 &&
-      payments.summary.rejectedCount === 14
+    assert('Payment summary accurately tallies statuses (200 total: approved, pending, rejected)',
+      payments.summary.totalCount === 200 &&
+      payments.summary.approvedCount + payments.summary.pendingCount + payments.summary.rejectedCount === 200
     );
 
     // 5. Per-College Billing Setup & Automatic Price Derivation

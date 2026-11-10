@@ -164,20 +164,41 @@ exports.getColleges = async (req, res, next) => {
     const limitNum = parseInt(limit, 10) || 10;
     const skipNum = (pageNum - 1) * limitNum;
 
-    const total = await prisma.college.count({ where });
-    const colleges = await prisma.college.findMany({
-      where,
-      include: {
-        subscriptionPeriods: {
-          where: { status: 'active' },
-          orderBy: { expires_at: 'desc' },
-          take: 1
-        }
-      },
-      orderBy: { createdAt: 'desc' },
-      skip: skipNum,
-      take: limitNum
-    });
+    const [total, colleges] = await Promise.all([
+      prisma.college.count({ where }),
+      prisma.college.findMany({
+        where,
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          slug: true,
+          email: true,
+          phone: true,
+          city: true,
+          address: true,
+          website: true,
+          isActive: true,
+          status: true,
+          subscription: true,
+          subscription_status: true,
+          subStatus: true,
+          planId: true,
+          totalStudents: true,
+          isTest: true,
+          createdAt: true,
+          updatedAt: true,
+          subscriptionPeriods: {
+            where: { status: 'active' },
+            orderBy: { expires_at: 'desc' },
+            take: 1
+          }
+        },
+        orderBy: { createdAt: 'desc' },
+        skip: skipNum,
+        take: limitNum
+      })
+    ]);
 
     const formattedColleges = colleges.map(c => {
       const activePeriod = c.subscriptionPeriods?.[0] || null;
@@ -799,30 +820,48 @@ exports.getSubscriptionOverview = async (req, res, next) => {
 exports.getPlatformAnalytics = async (req, res, next) => {
   try {
     const prisma = getSystemClient();
-    const roleGroup = await prisma.user.groupBy({
-      by: ['role'],
-      where: {
-        role: { not: 'superAdmin' }
-      },
-      _count: {
-        _all: true
-      }
-    });
+    const sixMonthsAgo = new Date();
+    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
+
+    const [roleGroup, collegesLast6Months, topColleges, totalRevenueSum] = await Promise.all([
+      prisma.user.groupBy({
+        by: ['role'],
+        where: {
+          role: { not: 'superAdmin' }
+        },
+        _count: {
+          _all: true
+        }
+      }),
+      prisma.college.findMany({
+        where: {
+          createdAt: { gte: sixMonthsAgo }
+        },
+        select: { createdAt: true }
+      }),
+      prisma.college.findMany({
+        where: { isActive: true },
+        orderBy: { totalStudents: 'desc' },
+        take: 10,
+        select: {
+          id: true,
+          name: true,
+          code: true,
+          totalStudents: true,
+          totalStaff: true,
+          subscription: true
+        }
+      }),
+      prisma.fee.aggregate({
+        where: { status: 'paid' },
+        _sum: { paidAmount: true }
+      })
+    ]);
 
     const roleDistribution = roleGroup.reduce((acc, r) => {
       acc[r.role] = r._count._all;
       return acc;
     }, {});
-
-    // Monthly college registrations (last 6 months)
-    const sixMonthsAgo = new Date();
-    sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-    const collegesLast6Months = await prisma.college.findMany({
-      where: {
-        createdAt: { gte: sixMonthsAgo }
-      },
-      select: { createdAt: true }
-    });
 
     const monthlyCounts = {};
     collegesLast6Months.forEach(c => {
@@ -834,31 +873,10 @@ exports.getPlatformAnalytics = async (req, res, next) => {
       .map(([_id, count]) => ({ _id, count }))
       .sort((a, b) => a._id.localeCompare(b._id));
 
-    // Top colleges by student count
-    const topColleges = await prisma.college.findMany({
-      where: { isActive: true },
-      orderBy: { totalStudents: 'desc' },
-      take: 10,
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        totalStudents: true,
-        totalStaff: true,
-        subscription: true
-      }
-    });
-
     const formattedTopColleges = topColleges.map(c => ({
       ...c,
       _id: c.id
     }));
-
-    // Total fee collected across platform
-    const totalRevenueSum = await prisma.fee.aggregate({
-      where: { status: 'paid' },
-      _sum: { paidAmount: true }
-    });
 
     const totalPlatformRevenue = totalRevenueSum._sum.paidAmount || 0;
 
@@ -1127,10 +1145,23 @@ exports.createPlatformInvoice = async (req, res, next) => {
 
 exports.getPlatformInvoices = async (req, res, next) => {
   try {
+    const { page, limit, status } = req.query;
     const prisma = getSystemClient();
-    const invoices = await prisma.platformInvoice.findMany({
-      orderBy: { createdAt: 'desc' }
-    });
+    const where = {};
+    if (status) where.status = status;
+
+    const pageNum = parseInt(page, 10);
+    const limitNum = parseInt(limit, 10);
+    const usePagination = !isNaN(pageNum) && !isNaN(limitNum) && limitNum > 0;
+
+    const [invoices, total] = await Promise.all([
+      prisma.platformInvoice.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        ...(usePagination ? { skip: (pageNum - 1) * limitNum, take: limitNum } : {})
+      }),
+      prisma.platformInvoice.count({ where })
+    ]);
 
     const collegeIds = [...new Set(invoices.map(i => i.college_id))];
     const colleges = await prisma.college.findMany({
@@ -1145,7 +1176,13 @@ exports.getPlatformInvoices = async (req, res, next) => {
       college: colMap[inv.college_id] || null
     }));
 
-    res.json({ success: true, count: data.length, data });
+    res.json({
+      success: true,
+      count: data.length,
+      total,
+      data,
+      ...(usePagination ? { pagination: { total, page: pageNum, pages: Math.ceil(total / limitNum) } } : {})
+    });
   } catch (error) { next(error); }
 };
 

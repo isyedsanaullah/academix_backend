@@ -47,6 +47,16 @@ scratch/
 /generated/prisma
 dist/
 build/
+*.zip
+*.tar.gz
+*.tgz
+
+# UI templates & reference kits
+UI components and pages, icons/
+UI components and pages, icons
+ui-template/
+ui template/
+template/
 
 # OS & Editor files
 .DS_Store
