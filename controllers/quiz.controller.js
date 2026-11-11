@@ -5,6 +5,7 @@ const { getDecryptedKey } = require('./aiApiKey.controller');
 const { queryRelevantChunks } = require('../services/vectorStore');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { getSystemClient } = require('../config/prismaManager');
+const { trackGeminiCall } = require('../services/aiUsageTracker');
 
 // In-Memory Background Job Queue Store for AI Quiz Generation
 const aiQuizJobs = new Map();
@@ -16,7 +17,7 @@ const normalizeText = (str) => {
 
 const isOpenRouterKey = (key) => typeof key === 'string' && key.trim().startsWith('sk-or-');
 
-const generateQuestionsWithAI = async (apiKey, prompt) => {
+const generateQuestionsWithAI = async (apiKey, prompt, telemetryContext = {}) => {
   if (isOpenRouterKey(apiKey)) {
     const modelsToTry = ['deepseek/deepseek-chat', 'meta-llama/llama-3.3-70b-instruct'];
     let lastErr = null;
@@ -58,7 +59,15 @@ const generateQuestionsWithAI = async (apiKey, prompt) => {
     for (const m of modelsToTry) {
       try {
         const model = genAI.getGenerativeModel({ model: m });
-        const result = await model.generateContent(prompt);
+        const result = await trackGeminiCall({
+          collegeId: telemetryContext.collegeId || null,
+          userId: telemetryContext.userId || null,
+          userRole: telemetryContext.userRole || 'teacher',
+          featureKey: 'quiz-generator',
+          modelName: m,
+          promptEstimate: prompt
+        }, () => model.generateContent(prompt));
+
         return result.response.text();
       } catch (err) {
         lastErr = err;
@@ -602,7 +611,11 @@ JSON Format:
   }
 ]`;
 
-          const resText = await generateQuestionsWithAI(apiKey, prompt);
+          const resText = await generateQuestionsWithAI(apiKey, prompt, {
+            collegeId: req.collegeId || null,
+            userId: req.user?._id || null,
+            userRole: req.user?.role || 'teacher'
+          });
           const jsonMatch = resText.match(/\[[\s\S]*\]/);
           if (jsonMatch) {
             const parsed = JSON.parse(jsonMatch[0]);

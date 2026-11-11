@@ -1,5 +1,6 @@
 const { getSystemClient } = require('../config/prismaManager');
 const { encrypt, decrypt, maskKey } = require('../utils/encryption');
+const { trackGeminiCall } = require('../services/aiUsageTracker');
 
 // @desc    Save or update AI API key
 // @route   POST /api/ai/api-key
@@ -242,7 +243,15 @@ exports.testKey = async (req, res, next) => {
     for (const modelName of modelsToTry) {
       try {
         const model = genAI.getGenerativeModel({ model: modelName });
-        const result = await model.generateContent('Reply with exactly one word: Hello');
+        const testPrompt = 'Reply with exactly one word: Hello';
+        const result = await trackGeminiCall({
+          collegeId: req.collegeId || null,
+          userId: req.user?._id || null,
+          userRole: req.user?.role || null,
+          featureKey: 'api-key-test',
+          modelName,
+          promptEstimate: testPrompt
+        }, () => model.generateContent(testPrompt));
         const text = result.response.text();
         return res.json({
           success: true,

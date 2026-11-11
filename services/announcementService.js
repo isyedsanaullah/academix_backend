@@ -6,6 +6,7 @@ const {
   ANNOUNCEMENT_STATUSES
 } = require('../config/announcementConstants');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { trackGeminiCall } = require('./aiUsageTracker');
 
 // Emergency keywords hierarchy
 const EMERGENCY_KEYWORDS = [
@@ -296,9 +297,16 @@ async function generateAnnouncementDraft({
         model: 'gemini-2.5-flash-lite',
         generationConfig: { responseMimeType: 'application/json' }
       });
-      const result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }]
-      });
+      const combinedPrompt = `${systemPrompt}\n\n${userPrompt}`;
+      const result = await trackGeminiCall({
+        collegeId: collegeId || null,
+        userRole: role || null,
+        featureKey: 'announcement-generator',
+        modelName: 'gemini-2.5-flash-lite',
+        promptEstimate: combinedPrompt
+      }, () => model.generateContent({
+        contents: [{ role: 'user', parts: [{ text: combinedPrompt }] }]
+      }));
       rawJsonText = result.response.text();
     } else {
       // Fallback openrouter call

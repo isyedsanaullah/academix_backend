@@ -221,6 +221,7 @@ const extractChapterHierarchy = async (pageTexts, apiKey = null) => {
   if (resultChapters.length < 2 && apiKey) {
     try {
       const { GoogleGenerativeAI } = require('@google/generative-ai');
+      const { trackGeminiCall } = require('./aiUsageTracker');
       const genAI = new GoogleGenerativeAI(apiKey);
       const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
       
@@ -239,7 +240,12 @@ Return ONLY valid JSON matching this exact format:
 Document Text Sample:
 ${sampleText}`;
 
-      const res = await model.generateContent(prompt);
+      const res = await trackGeminiCall({
+        collegeId: null,
+        featureKey: 'pdf-toc-extraction',
+        modelName: 'gemini-2.5-flash-lite',
+        promptEstimate: prompt
+      }, () => model.generateContent(prompt));
       const resText = res.response.text();
       const jsonMatch = resText.match(/\{[\s\S]*\}/);
       if (jsonMatch) {

@@ -12,6 +12,7 @@
  */
 
 const { generateServiceAssertion, ASSERTION_HEADER } = require('./aiServiceAssertion');
+const { recordAIUsage } = require('./aiUsageTracker');
 const crypto = require('crypto');
 
 const AI_SERVICE_URL = (process.env.AI_SERVICE_URL || 'http://localhost:10001').replace(/\/+$/, '');
@@ -185,35 +186,85 @@ async function executeCompletion({
 
   const correlationId = requestId || crypto.randomUUID();
   const url = `${AI_SERVICE_URL}/internal/v1/chat/completions`;
+  const startTime = Date.now();
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-      [ASSERTION_HEADER]: token,
-      'X-Request-Id': correlationId,
-    },
-    body: JSON.stringify({
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        [ASSERTION_HEADER]: token,
+        'X-Request-Id': correlationId,
+      },
+      body: JSON.stringify({
+        featureKey,
+        messages,
+        temperature,
+        maxTokens,
+      }),
+      signal: AbortSignal.timeout(60000), // 60s max for unary completions
+    });
+
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      recordAIUsage({
+        requestId: correlationId,
+        collegeId: collegeId && collegeId !== 'system-college' ? collegeId : null,
+        userId: userId && userId !== 'system-user' ? userId : null,
+        userRole: role,
+        featureKey,
+        modelName: body?.modelKey || 'gemini-2.0-flash',
+        durationMs: Date.now() - startTime,
+        status: res.status === 429 ? 'RATE_LIMITED' : 'FAILED',
+        statusCode: res.status,
+        errorMessage: body?.message || `AI execution failed with status ${res.status}`
+      }).catch(() => {});
+
+      throw new AIMicroserviceClientError(
+        body.message || `AI execution failed with status ${res.status}`,
+        res.status,
+        body.error || 'AI_EXECUTION_FAILED',
+        body
+      );
+    }
+
+    // Telemetry tracking for successful completion
+    recordAIUsage({
+      requestId: correlationId,
+      collegeId: collegeId && collegeId !== 'system-college' ? collegeId : null,
+      userId: userId && userId !== 'system-user' ? userId : null,
+      userRole: role,
       featureKey,
-      messages,
-      temperature,
-      maxTokens,
-    }),
-    signal: AbortSignal.timeout(60000), // 60s max for unary completions
-  });
+      modelName: body.modelKey || 'gemini-2.0-flash',
+      promptTokens: body.usage?.promptTokens || body.usage?.promptTokenCount || 0,
+      outputTokens: body.usage?.completionTokens || body.usage?.candidatesTokenCount || 0,
+      cachedTokens: body.usage?.cachedTokens || body.usage?.cachedContentTokenCount || 0,
+      reasoningTokens: body.usage?.reasoningTokens || 0,
+      totalTokens: body.usage?.totalTokens || body.usage?.totalTokenCount || 0,
+      durationMs: Date.now() - startTime,
+      status: 'SUCCESS',
+      statusCode: 200
+    }).catch(() => {});
 
-  const body = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    throw new AIMicroserviceClientError(
-      body.message || `AI execution failed with status ${res.status}`,
-      res.status,
-      body.error || 'AI_EXECUTION_FAILED',
-      body
-    );
+    return body;
+  } catch (fetchErr) {
+    if (!(fetchErr instanceof AIMicroserviceClientError)) {
+      recordAIUsage({
+        requestId: correlationId,
+        collegeId: collegeId && collegeId !== 'system-college' ? collegeId : null,
+        userId: userId && userId !== 'system-user' ? userId : null,
+        userRole: role,
+        featureKey,
+        modelName: 'gemini-2.0-flash',
+        durationMs: Date.now() - startTime,
+        status: 'FAILED',
+        statusCode: 500,
+        errorMessage: fetchErr.message
+      }).catch(() => {});
+    }
+    throw fetchErr;
   }
-
-  return body;
 }
 
 /**
@@ -256,6 +307,7 @@ async function pipeChatStreamToExpress({
 
   const correlationId = (req && req.headers && req.headers['x-request-id']) || crypto.randomUUID();
   const url = `${AI_SERVICE_URL}/internal/v1/chat/stream`;
+  const streamStartTime = Date.now();
 
   const abortController = new AbortController();
   if (req && req.on) {
@@ -285,6 +337,20 @@ async function pipeChatStreamToExpress({
 
   if (!response.ok) {
     const errorBody = await response.json().catch(() => ({}));
+
+    recordAIUsage({
+      requestId: correlationId,
+      collegeId: collegeId && collegeId !== 'system-college' ? collegeId : null,
+      userId: userId && userId !== 'system-user' ? userId : null,
+      userRole: role,
+      featureKey,
+      modelName: 'gemini-2.0-flash',
+      durationMs: Date.now() - streamStartTime,
+      status: response.status === 429 ? 'RATE_LIMITED' : 'FAILED',
+      statusCode: response.status,
+      errorMessage: errorBody?.message || response.statusText
+    }).catch(() => {});
+
     if (response.status === 422) {
       // Insufficient credits error
       res.write(`data: ${JSON.stringify({
@@ -331,14 +397,47 @@ async function pipeChatStreamToExpress({
             if (data.text && !data.done && onChunk) {
               onChunk(data.text);
             }
-            if (data.done && onDone) {
-              onDone(data);
+            if (data.done) {
+              if (onDone) {
+                onDone(data);
+              }
+
+              // Telemetry tracking for stream completion
+              recordAIUsage({
+                requestId: correlationId,
+                collegeId: collegeId && collegeId !== 'system-college' ? collegeId : null,
+                userId: userId && userId !== 'system-user' ? userId : null,
+                userRole: role,
+                featureKey,
+                modelName: data.modelKey || 'gemini-2.0-flash',
+                promptTokens: data.usage?.promptTokens || data.usage?.promptTokenCount || 0,
+                outputTokens: data.usage?.completionTokens || data.usage?.candidatesTokenCount || 0,
+                cachedTokens: data.usage?.cachedTokens || data.usage?.cachedContentTokenCount || 0,
+                reasoningTokens: data.usage?.reasoningTokens || 0,
+                totalTokens: data.usage?.totalTokens || data.usage?.totalTokenCount || 0,
+                durationMs: Date.now() - streamStartTime,
+                status: 'SUCCESS',
+                statusCode: 200
+              }).catch(() => {});
             }
           } catch {}
         }
       }
     }
   } catch (streamErr) {
+    recordAIUsage({
+      requestId: correlationId,
+      collegeId: collegeId && collegeId !== 'system-college' ? collegeId : null,
+      userId: userId && userId !== 'system-user' ? userId : null,
+      userRole: role,
+      featureKey,
+      modelName: 'gemini-2.0-flash',
+      durationMs: Date.now() - streamStartTime,
+      status: 'FAILED',
+      statusCode: 500,
+      errorMessage: streamErr.message
+    }).catch(() => {});
+
     if (!res.writableEnded) {
       res.write(`data: ${JSON.stringify({ text: `Stream error: ${streamErr.message}`, done: true, error: true })}\n\n`);
       res.end();

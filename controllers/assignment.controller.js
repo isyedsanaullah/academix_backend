@@ -2,6 +2,7 @@
 const { getDecryptedKey } = require('./aiApiKey.controller');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { getSystemClient } = require('../config/prismaManager');
+const { trackGeminiCall } = require('../services/aiUsageTracker');
 
 exports.getAssignments = async (req, res, next) => {
   try {
@@ -253,7 +254,15 @@ exports.aiGradeSubmission = async (req, res, next) => {
     const prompt = `You are an assignment grading assistant. Grade this student submission.\n\nASSIGNMENT: "${a.title}"\nDESCRIPTION: ${a.description || 'N/A'}\nTOTAL MARKS: ${a.totalMarks}\nSTUDENT REMARKS: ${sub.remarks || 'None'}\nSUBMITTED FILE: ${sub.fileUrl || 'No file'}\n\nRespond in EXACT JSON format (no markdown):\n{"marks":<number 0-${a.totalMarks}>,"feedback":"<2-3 sentence feedback>","isAiGenerated":<true/false>,"confidence":<0-100>,"missingPoints":["<point1>","<point2>"]}\n\nKeep response under 200 tokens.`;
 
     try {
-      const result = await model.generateContent({ contents: [{ role: 'user', parts: [{ text: prompt }] }] });
+      const result = await trackGeminiCall({
+        collegeId: req.collegeId || null,
+        userId: req.user?._id || null,
+        userRole: req.user?.role || 'teacher',
+        featureKey: 'assignment-grade',
+        modelName: 'gemini-2.5-flash-lite',
+        promptEstimate: prompt
+      }, () => model.generateContent({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }));
+
       const text = result.response.text().trim();
       let parsed;
       try {
@@ -337,7 +346,14 @@ exports.aiBatchGrade = async (req, res, next) => {
       const sub = submissions[subIndex];
       try {
         const prompt = `Grade briefly. Assignment: "${a.title}", Max marks: ${a.totalMarks}, Student remarks: "${sub.remarks || 'None'}".\nReply JSON only: {"marks":<0-${a.totalMarks}>,"feedback":"<1 sentence>","isAiGenerated":<bool>,"confidence":<0-100>,"missingPoints":["<point>"]}`;
-        const result = await model.generateContent({ contents: [{ role: 'user', parts: [{ text: prompt }] }] });
+        const result = await trackGeminiCall({
+          collegeId: req.collegeId || null,
+          userId: req.user?._id || null,
+          userRole: req.user?.role || 'teacher',
+          featureKey: 'assignment-batch-grade',
+          modelName: 'gemini-2.5-flash-lite',
+          promptEstimate: prompt
+        }, () => model.generateContent({ contents: [{ role: 'user', parts: [{ text: prompt }] }] }));
         const text = result.response.text().trim();
         const clean = text.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
         let parsed;

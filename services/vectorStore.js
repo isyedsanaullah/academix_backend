@@ -1,5 +1,6 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { getSystemClient } = require('../config/prismaManager');
+const { recordAIUsage } = require('./aiUsageTracker');
 const aiMicroserviceClient = require('./aiMicroserviceClient');
 
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-004';
@@ -41,11 +42,26 @@ const generateEmbedding = async (text, apiKey) => {
     return null;
   }
 
+  const startTime = Date.now();
+  const estimatedTokens = Math.ceil((text || '').length / 4);
+
   try {
     const genAI = new GoogleGenerativeAI(token);
     const model = genAI.getGenerativeModel({ model: EMBEDDING_MODEL });
     const result = await model.embedContent(text);
     const values = result?.embedding?.values;
+
+    recordAIUsage({
+      featureKey: 'vector-embedding',
+      modelName: EMBEDDING_MODEL || 'text-embedding-004',
+      promptTokens: estimatedTokens,
+      outputTokens: 0,
+      cachedTokens: 0,
+      totalTokens: estimatedTokens,
+      durationMs: Date.now() - startTime,
+      status: 'SUCCESS',
+      statusCode: 200
+    }).catch(() => {});
     
     if (values && values.length === EMBEDDING_DIMENSION) {
       return values;
@@ -58,6 +74,17 @@ const generateEmbedding = async (text, apiKey) => {
 
     return null;
   } catch (error) {
+    recordAIUsage({
+      featureKey: 'vector-embedding',
+      modelName: EMBEDDING_MODEL || 'text-embedding-004',
+      promptTokens: estimatedTokens,
+      outputTokens: 0,
+      durationMs: Date.now() - startTime,
+      status: 'FAILED',
+      statusCode: 500,
+      errorMessage: error.message
+    }).catch(() => {});
+
     console.error(`Gemini Embedding (${EMBEDDING_MODEL}) failed:`, error.message);
     return null;
   }

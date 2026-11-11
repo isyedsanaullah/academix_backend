@@ -142,6 +142,8 @@ app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/me', require('./routes/me.routes'));
 app.use('/api/super-admin', require('./routes/superAdmin.routes'));
 app.use('/api/superadmin', require('./routes/superAdmin.routes'));
+app.use('/api/super-admin/usage/ai', require('./routes/superAdminAiUsage.routes'));
+app.use('/api/superadmin/usage/ai', require('./routes/superAdminAiUsage.routes'));
 // Phase 8: Scheduled cron job endpoints (secret-protected)
 app.use('/api/cron', require('./routes/cron.routes'));
 

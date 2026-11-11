@@ -1,4 +1,5 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { trackGeminiCall } = require('./aiUsageTracker');
 const { validateReportSpec } = require('./reportSpecValidator');
 const {
   fetchPlatformSummary,
@@ -86,9 +87,16 @@ async function generateReportSpec({ message, apiKey }) {
       model: 'gemini-2.5-flash-lite',
       generationConfig: { responseMimeType: 'application/json' }
     });
-    const result = await model.generateContent({
-      contents: [{ role: 'user', parts: [{ text: `${systemPrompt}\n\n${userPrompt}` }] }]
-    });
+    const promptText = `${systemPrompt}\n\n${userPrompt}`;
+    const result = await trackGeminiCall({
+      collegeId: null,
+      userRole: 'superAdmin',
+      featureKey: 'super-admin-report-spec',
+      modelName: 'gemini-2.5-flash-lite',
+      promptEstimate: promptText
+    }, () => model.generateContent({
+      contents: [{ role: 'user', parts: [{ text: promptText }] }]
+    }));
     rawJsonText = result.response.text();
   } else {
     // Openrouter fallback
