@@ -12,9 +12,18 @@ const tenantContext = require('../middleware/tenantContext');
 const { subscriptionGate } = require('../middleware/subscriptionGate');
 
 const aiController = require('../controllers/ai.controller');
+const { saveKey, getKey, deleteKey, testKey } = require('../controllers/aiApiKey.controller');
 
 // Common middleware for all AI operations
 router.use(protect, tenantContext);
+
+// AI Provider API Key configuration & testing (Self-service key vault)
+router.route('/api-key')
+  .get(getKey)
+  .post(saveKey)
+  .delete(deleteKey);
+
+router.post('/api-key/test', testKey);
 
 // Engine 1: Student Tutor Chat (#99)
 router.post('/tutor/chat', subscriptionGate('ai-tutor-chat'), aiController.tutorChat);

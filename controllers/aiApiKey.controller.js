@@ -43,6 +43,35 @@ exports.saveKey = async (req, res, next) => {
       }
     });
 
+    // Fire-and-forget sync to collegeshub-ai-service database vault
+    try {
+      const { generateServiceAssertion, ASSERTION_HEADER } = require('../services/aiServiceAssertion');
+      const AI_SERVICE_URL = (process.env.AI_SERVICE_URL || 'https://collegeshub-ai-service.onrender.com').replace(/\/+$/, '');
+      const assertion = generateServiceAssertion({
+        tenantId: req.user.college_id || 'system',
+        userId: req.user.id || req.user._id,
+        role: req.user.role || 'superAdmin',
+        subscriptionTier: 'ENTERPRISE'
+      });
+
+      fetch(`${AI_SERVICE_URL}/internal/v1/admin/credentials`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          [ASSERTION_HEADER]: assertion,
+          'X-Request-Id': require('crypto').randomUUID()
+        },
+        body: JSON.stringify({
+          provider: provider || 'gemini',
+          apiKey: apiKey.trim(),
+          isPrimary: true
+        }),
+        signal: AbortSignal.timeout(4000)
+      }).catch(err => {
+        console.warn('[aiApiKey.controller] Warning: Failed to sync credential to AI microservice:', err.message);
+      });
+    } catch (_) {}
+
     res.json({
       success: true,
       message: 'API key saved securely',
