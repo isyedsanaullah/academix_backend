@@ -351,12 +351,77 @@ async function pipeChatStreamToExpress({
   }
 }
 
+/**
+ * Query tenant-isolated semantic RAG knowledge chunks from the AI microservice.
+ *
+ * @param {object} params
+ * @param {string} params.collegeId
+ * @param {string} [params.userId]
+ * @param {string} [params.role]
+ * @param {string} [params.planId]
+ * @param {string} params.query
+ * @param {string} [params.subject]
+ * @param {number} [params.topK]
+ * @param {number} [params.minSimilarity]
+ * @returns {Promise<Array<object>>}
+ */
+async function queryRagKnowledge({
+  collegeId,
+  userId = 'system-rag',
+  role = 'student',
+  planId = 'standard',
+  query,
+  subject,
+  topK = 5,
+  minSimilarity = 0.35,
+}) {
+  const token = generateServiceAssertion({
+    userId: String(userId),
+    collegeId: String(collegeId),
+    role,
+    planId,
+  });
+
+  const url = `${AI_SERVICE_URL}/internal/v1/rag/query`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      [ASSERTION_HEADER]: token,
+      'X-Request-Id': crypto.randomUUID(),
+    },
+    body: JSON.stringify({
+      query,
+      subject,
+      topK,
+      minSimilarity,
+    }),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new AIMicroserviceClientError(
+      body.message || `RAG query failed with status ${res.status}`,
+      res.status,
+      body.error || 'RAG_QUERY_FAILED',
+      body
+    );
+  }
+
+  const data = await res.json();
+  return data.chunks || [];
+}
+
 module.exports = {
   checkHealth,
   ping,
   deliverOutboxEvent,
   executeCompletion,
   pipeChatStreamToExpress,
+  queryRagKnowledge,
   AIMicroserviceClientError,
   AI_SERVICE_URL,
 };

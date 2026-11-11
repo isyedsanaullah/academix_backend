@@ -1,5 +1,6 @@
 const { GoogleGenerativeAI } = require('@google/generative-ai');
 const { getSystemClient } = require('../config/prismaManager');
+const aiMicroserviceClient = require('./aiMicroserviceClient');
 
 const EMBEDDING_MODEL = process.env.EMBEDDING_MODEL || 'text-embedding-004';
 const EMBEDDING_DIMENSION = parseInt(process.env.EMBEDDING_DIMENSION || '768', 10);
@@ -149,6 +150,28 @@ const addDocumentChunks = async ({ documentId, collegeId, subject, class: classN
  * Enforces strict pre-filtering by collegeId, subject, class, section, academicSession
  */
 const queryRelevantChunks = async ({ query, collegeId, subject, class: className, section, academicSession, chapter, topic, apiKey, topK = 5 }) => {
+  // ─── 0. Centralized AI Microservice Vector Search (Primary) ───
+  try {
+    const microserviceChunks = await aiMicroserviceClient.queryRagKnowledge({
+      collegeId: String(collegeId),
+      query,
+      subject,
+      topK,
+    });
+    if (microserviceChunks && microserviceChunks.length > 0) {
+      return microserviceChunks.map((c) => ({
+        text: c.text,
+        score: c.similarity || 0,
+        metadata: { originalName: c.documentTitle },
+        pageNumber: c.pageNumber,
+        sectionTitle: c.citation,
+        subject: c.subject,
+      }));
+    }
+  } catch (msErr) {
+    // Graceful fallback to local DB search if microservice unreachable during transition
+  }
+
   const prisma = getSystemClient();
   const queryEmbedding = await generateEmbedding(query, apiKey);
 
