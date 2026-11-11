@@ -23,6 +23,64 @@ function getPrisma() {
   return getSystemClient();
 }
 
+// In-memory sliding window cache for failed password attempts (15-minute expiry)
+const failedPasswordTracker = new Map();
+
+function recordFailedPasswordAttempt(identifier) {
+  if (!identifier) return;
+  const key = String(identifier).toLowerCase().trim();
+  const now = Date.now();
+  const existing = failedPasswordTracker.get(key) || { count: 0, expiresAt: now + 15 * 60 * 1000 };
+  existing.count += 1;
+  existing.expiresAt = now + 15 * 60 * 1000;
+  failedPasswordTracker.set(key, existing);
+}
+
+function hasRecentFailedPassword(identifier) {
+  if (!identifier) return false;
+  const key = String(identifier).toLowerCase().trim();
+  const existing = failedPasswordTracker.get(key);
+  if (!existing) return false;
+  if (Date.now() > existing.expiresAt) {
+    failedPasswordTracker.delete(key);
+    return false;
+  }
+  return existing.count > 0;
+}
+
+function clearFailedPasswordAttempt(identifier) {
+  if (!identifier) return;
+  const key = String(identifier).toLowerCase().trim();
+  failedPasswordTracker.delete(key);
+}
+
+/**
+ * Check whether the incoming request originates from a recognized / trusted device.
+ */
+async function isKnownDevice(req, user) {
+  if (!user || !user.id) return false;
+  try {
+    const prisma = getPrisma();
+    const rawCookie = req.cookies?.['__Host-acx_did'] || req.cookies?.['acx_did'] || req.headers['x-device-id'];
+    const validDeviceId = verifyDeviceCookie(rawCookie);
+    if (!validDeviceId) return false;
+
+    const devHash = hashDeviceId(validDeviceId);
+    const existing = await prisma.knownDevice.findFirst({
+      where: {
+        college_id: user.college_id || 'platform',
+        userId: user.id,
+        deviceIdHash: devHash
+      }
+    });
+
+    return !!existing;
+  } catch (err) {
+    console.error('[isKnownDevice] Failed to verify device:', err.message);
+    return false;
+  }
+}
+
 /**
  * Helper to process device cookie and dispatch alert if unrecognized
  */
@@ -198,6 +256,11 @@ async function verify2FA(req, res) {
       }
     });
 
+    // Register this device immediately as a trusted device upon successful 2FA setup
+    await processKnownDevice(req, res, user);
+    clearFailedPasswordAttempt(user.id);
+    clearFailedPasswordAttempt(user.email);
+
     // Issue upgraded full session token if the user was under ENROLL_2FA scope
     const token = generateToken(user.id, user.college_id, user.role);
 
@@ -312,6 +375,8 @@ async function validate2FA(req, res) {
 
     // 6. Known Device tracking & alert
     await processKnownDevice(req, res, user);
+    clearFailedPasswordAttempt(user.id);
+    clearFailedPasswordAttempt(user.email);
 
     // 7. Issue session token
     let collegeTokenEpoch = 0;
@@ -530,5 +595,9 @@ module.exports = {
   disable2FA,
   listKnownDevices,
   removeKnownDevice,
-  processKnownDevice
+  processKnownDevice,
+  isKnownDevice,
+  recordFailedPasswordAttempt,
+  hasRecentFailedPassword,
+  clearFailedPasswordAttempt
 };

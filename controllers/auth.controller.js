@@ -10,7 +10,13 @@ const mailService = require('../services/mailService');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { STEP_UP_SECRET } = require('../middleware/stepUpAuth');
-const { processKnownDevice } = require('./twoFactor.controller');
+const {
+  processKnownDevice,
+  isKnownDevice,
+  hasRecentFailedPassword,
+  recordFailedPasswordAttempt,
+  clearFailedPasswordAttempt
+} = require('./twoFactor.controller');
 
 // In-memory rate limiting for step-up auth (5 failures -> 15 min lockout)
 const stepUpAttempts = new Map();
@@ -107,6 +113,9 @@ exports.login = async (req, res, next) => {
 
     const isMatch = user.password ? await bcrypt.compare(password, user.password) : false;
     if (!isMatch) {
+      // Record failed password attempt to enforce step-up 2FA on suspicious subsequent logins
+      recordFailedPasswordAttempt(user.id);
+      recordFailedPasswordAttempt(user.email);
       return res.status(401).json({ success: false, message: 'Invalid credentials' });
     }
 
@@ -218,7 +227,7 @@ exports.login = async (req, res, next) => {
       }
     }
 
-    // Phase 9A: Two-Factor Authentication Check
+    // Phase 9A: Adaptive Two-Factor Authentication Check
     if (user.totpEnabled) {
       if (user.totpLockedUntil && user.totpLockedUntil > new Date()) {
         const remainingMin = Math.ceil((user.totpLockedUntil.getTime() - Date.now()) / 60000);
@@ -229,18 +238,30 @@ exports.login = async (req, res, next) => {
         });
       }
 
-      const preAuthToken = jwt.sign(
-        { userId: user.id, collegeId: user.college_id, role: user.role, scope: 'PREAUTH_2FA', jti: crypto.randomUUID() },
-        process.env.JWT_SECRET,
-        { expiresIn: '5m' }
-      );
+      const isDeviceTrusted = await isKnownDevice(req, user);
+      const hadFailedPassword = hasRecentFailedPassword(user.id) || hasRecentFailedPassword(user.email);
 
-      return res.json({
-        success: true,
-        requires2FA: true,
-        preAuthToken,
-        message: 'Two-factor authentication required. Please enter your 6-digit authenticator code.'
-      });
+      // Adaptive Bypass: If device is recognized and no recent failed passwords occurred -> Skip 2FA!
+      if (isDeviceTrusted && !hadFailedPassword) {
+        clearFailedPasswordAttempt(user.id);
+        clearFailedPasswordAttempt(user.email);
+      } else {
+        // New/unrecognized device OR suspicious login after incorrect password -> Enforce 2FA!
+        const preAuthToken = jwt.sign(
+          { userId: user.id, collegeId: user.college_id, role: user.role, scope: 'PREAUTH_2FA', jti: crypto.randomUUID() },
+          process.env.JWT_SECRET,
+          { expiresIn: '5m' }
+        );
+
+        return res.json({
+          success: true,
+          requires2FA: true,
+          preAuthToken,
+          message: isDeviceTrusted
+            ? 'Suspicious login attempt detected after failed password. Please enter your 6-digit authenticator code.'
+            : 'Two-factor authentication required for this new device. Please enter your 6-digit authenticator code.'
+        });
+      }
     }
 
     // Phase 9A: Enforced 2FA for College Admins after grace period
@@ -266,7 +287,9 @@ exports.login = async (req, res, next) => {
       }
     }
 
-    // Process Known Device tracking & alert
+    // Clear failed password markers and process Known Device tracking & alert
+    clearFailedPasswordAttempt(user.id);
+    clearFailedPasswordAttempt(user.email);
     await processKnownDevice(req, res, user);
 
     const token = generateToken(user.id, user.college_id || null, user.role, college ? (college.tokenEpoch || 0) : 0);

@@ -176,9 +176,9 @@ function generate2FASetup(email) {
 }
 
 /**
- * Verify a 6-digit TOTP code with +-1 window and replay protection
+ * Verify a 6-digit TOTP code with +-2 window (+-60s drift tolerance) and replay protection
  */
-function verifyTotpCode({ secretBase32, code, lastAcceptedStep = null, window = 1, nowMs = Date.now() }) {
+function verifyTotpCode({ secretBase32, code, lastAcceptedStep = null, window = 2, nowMs = Date.now() }) {
   if (!code || typeof code !== 'string') return { valid: false, reason: 'INVALID_FORMAT' };
   const cleanCode = code.trim();
   if (cleanCode.length !== 6 || !/^\d{6}$/.test(cleanCode)) {
