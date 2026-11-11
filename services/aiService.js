@@ -4,6 +4,7 @@ const { filterContent } = require('./contentFilter');
 const templates = require('./promptTemplates');
 const { getSystemClient } = require('../config/prismaManager');
 const { buildDatabaseContext } = require('./dbContext');
+const aiMicroserviceClient = require('./aiMicroserviceClient');
 
 const RAG_SIMILARITY_THRESHOLD = parseFloat(process.env.RAG_SIMILARITY_THRESHOLD || '0.35');
 
@@ -446,45 +447,30 @@ const generateResponse = async ({ message, role, userId, collegeId, apiKey, conv
     systemPrompt += `\n\n## Real-Time College Database Info\n${dbContext}`;
   }
 
-  const modelName = isGeminiKey(apiKey) ? 'gemini-2.5-flash-lite' : 'deepseek/deepseek-chat';
-  const apiStart = Date.now();
+  const messages = [{ role: 'system', content: systemPrompt }];
+  if (conversationHistory && conversationHistory.length > 0) {
+    const recentHistory = conversationHistory.slice(-10);
+    for (const msg of recentHistory) {
+      messages.push({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content
+      });
+    }
+  }
+  messages.push({ role: 'user', content: userPrompt });
 
   try {
-    let text = '';
-    
-    if (isGeminiKey(apiKey)) {
-      const genAI = new GoogleGenerativeAI(apiKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
+    const result = await aiMicroserviceClient.executeCompletion({
+      collegeId: collegeId || 'system-college',
+      userId: userId || 'system-user',
+      role: role || 'student',
+      featureKey: 'ai-chat',
+      messages,
+      temperature: 0.7,
+      maxTokens: 2048,
+    });
 
-      const contents = [];
-      if (conversationHistory.length === 0) {
-        contents.push({ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] });
-      } else {
-        const recentHistory = conversationHistory.slice(-10);
-        for (const msg of recentHistory) {
-          contents.push({
-            role: msg.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: msg.content }]
-          });
-        }
-        contents.push({ role: 'user', parts: [{ text: userPrompt }] });
-      }
-
-      const result = await model.generateContent({ contents });
-      text = result.response.text();
-    } else {
-      const messages = [{ role: 'system', content: systemPrompt }];
-      const recentHistory = conversationHistory.slice(-10);
-      for (const msg of recentHistory) {
-        messages.push({
-          role: msg.role === 'assistant' ? 'assistant' : 'user',
-          content: msg.content
-        });
-      }
-      messages.push({ role: 'user', content: userPrompt });
-
-      text = await callOpenRouter(messages, apiKey, 'deepseek/deepseek-chat');
-    }
+    let text = result.text || '';
 
     // Attach mandatory citations for course-material responses only
     if (role === 'student' && responseSource === 'course-material' && retrievedChunks.length > 0) {
@@ -499,14 +485,14 @@ const generateResponse = async ({ message, role, userId, collegeId, apiKey, conv
           userId: String(userId),
           collegeId: String(collegeId),
           action: responseSource === 'course-material' ? 'rag-chat' : responseSource === 'personal-data' ? 'personal-data-chat' : 'academic-chat',
-          model: modelName,
+          model: result.modelKey || 'gemini-2.0-flash',
           duration: Date.now() - startTime,
-          tokensUsed: text.length
+          tokensUsed: result.usage?.totalTokens || Math.ceil(text.length / 4)
         }
       });
     } catch (e) {}
 
-    return { text, blocked: false };
+    return { text, blocked: false, usage: result.usage, creditsDebited: result.creditsDebited };
   } catch (error) {
     console.error('AI Response Generation Error:', error);
     return { text: `Error generating response: ${error.message}`, blocked: true };
@@ -516,7 +502,7 @@ const generateResponse = async ({ message, role, userId, collegeId, apiKey, conv
 /**
  * Generate streaming response
  */
-const generateStreamingResponse = async ({ message, role, userId, collegeId, apiKey, conversationHistory = [], subject, class: className, section, academicSession, res }) => {
+const generateStreamingResponse = async ({ message, role, userId, collegeId, apiKey, conversationHistory = [], subject, class: className, section, academicSession, req, res }) => {
   const startTime = Date.now();
 
   if (role === 'student') {
@@ -620,64 +606,63 @@ const generateStreamingResponse = async ({ message, role, userId, collegeId, api
     systemPrompt += `\n\n## Real-Time College Database Info\n${dbContext}`;
   }
 
-  const effectiveKey = apiKey || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
+  const messages = [{ role: 'system', content: systemPrompt }];
+  if (conversationHistory && conversationHistory.length > 0) {
+    const recentHistory = conversationHistory.slice(-10);
+    for (const msg of recentHistory) {
+      messages.push({
+        role: msg.role === 'assistant' ? 'assistant' : 'user',
+        content: msg.content
+      });
+    }
+  }
+  messages.push({ role: 'user', content: userPrompt });
 
   try {
-    if (isGeminiKey(effectiveKey)) {
-      const genAI = new GoogleGenerativeAI(effectiveKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    let fullDelivered = '';
+    await aiMicroserviceClient.pipeChatStreamToExpress({
+      collegeId: collegeId || 'system-college',
+      userId: userId || 'system-user',
+      role: role || 'student',
+      featureKey: 'ai-chat',
+      messages,
+      temperature: 0.7,
+      maxTokens: 2048,
+      req: req || res?.req,
+      res,
+      onChunk: (delta) => {
+        fullDelivered += delta;
+      },
+      onDone: async (doneData) => {
+        // Attach citations only for course-material responses before stream closure
+        if (role === 'student' && responseSource === 'course-material' && retrievedChunks.length > 0) {
+          const footer = buildSourcesCitationFooter(retrievedChunks);
+          res.write(`data: ${JSON.stringify({ text: footer, done: false })}\n\n`);
+        }
 
-      const contents = [];
-      if (conversationHistory.length === 0) {
-        contents.push({ role: 'user', parts: [{ text: systemPrompt + '\n\n' + userPrompt }] });
-      } else {
-        const recentHistory = conversationHistory.slice(-10);
-        for (const msg of recentHistory) {
-          contents.push({
-            role: msg.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: msg.content }]
+        // Log detailed analytics
+        try {
+          const prisma = getSystemClient();
+          await prisma.aIUsageLog.create({
+            data: {
+              userId: String(userId),
+              collegeId: String(collegeId),
+              action: responseSource === 'course-material' ? 'rag-stream' : responseSource === 'personal-data' ? 'personal-stream' : 'academic-stream',
+              model: doneData?.modelKey || 'gemini-2.0-flash',
+              duration: Date.now() - startTime,
+              tokensUsed: doneData?.usage?.totalTokens || Math.ceil(fullDelivered.length / 4)
+            }
           });
-        }
-        contents.push({ role: 'user', parts: [{ text: userPrompt }] });
+        } catch (e) {}
       }
-
-      const result = await model.generateContentStream({ contents });
-      let fullText = '';
-      for await (const chunk of result.stream) {
-        const chunkText = chunk.text();
-        if (chunkText) {
-          fullText += chunkText;
-          res.write(`data: ${JSON.stringify({ text: chunkText, done: false })}\n\n`);
-        }
-      }
-
-      // Attach citations only for course-material responses
-      if (role === 'student' && responseSource === 'course-material' && retrievedChunks.length > 0) {
-        const footer = buildSourcesCitationFooter(retrievedChunks);
-        res.write(`data: ${JSON.stringify({ text: footer, done: false })}\n\n`);
-      }
-
-      res.write(`data: ${JSON.stringify({ text: '', done: true })}\n\n`);
-      res.end();
-    } else {
-      const messages = [{ role: 'system', content: systemPrompt }];
-      const recentHistory = conversationHistory.slice(-10);
-      for (const msg of recentHistory) {
-        messages.push({
-          role: msg.role === 'assistant' ? 'assistant' : 'user',
-          content: msg.content
-        });
-      }
-      messages.push({ role: 'user', content: userPrompt });
-
-      const postprocessFn = (role === 'student' && responseSource === 'course-material' && retrievedChunks.length > 0)
-        ? () => buildSourcesCitationFooter(retrievedChunks)
-        : null;
-
-      await streamOpenRouter(messages, effectiveKey, 'deepseek/deepseek-chat', res, postprocessFn);
-    }
+    });
   } catch (error) {
     console.error('Streaming response error:', error);
+    if (!res.headersSent) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: false, message: error.message }));
+      return;
+    }
     res.write(`data: ${JSON.stringify({ text: `Error: ${error.message}`, done: true, error: true })}\n\n`);
     res.end();
   }
@@ -689,25 +674,25 @@ const generateFromTemplate = async ({ templateName, params, apiKey, userId, coll
   if (!template) throw new Error(`Unknown template: ${templateName}`);
 
   const { system, user } = template(params);
-  const effectiveKey = apiKey || process.env.GEMINI_API_KEY || process.env.OPENROUTER_API_KEY;
+  const messages = [
+    { role: 'system', content: system },
+    { role: 'user', content: user }
+  ];
 
   try {
-    let text = '';
-    
-    if (isGeminiKey(effectiveKey)) {
-      const genAI = new GoogleGenerativeAI(effectiveKey);
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-lite' });
-      const result = await model.generateContent({
-        contents: [{ role: 'user', parts: [{ text: system + '\n\n' + user }] }]
-      });
-      text = result.response.text();
-    } else {
-      const messages = [
-        { role: 'system', content: system },
-        { role: 'user', content: user }
-      ];
-      text = await callOpenRouter(messages, effectiveKey, 'deepseek/deepseek-chat');
-    }
+    const result = await aiMicroserviceClient.executeCompletion({
+      collegeId: collegeId || 'system-college',
+      userId: userId || 'system-user',
+      role: 'admin',
+      featureKey: `template-${templateName}`,
+      messages,
+      temperature: 0.7,
+      maxTokens: 2048,
+    });
+
+    const text = result.text || '';
+    const modelUsed = result.modelKey || 'gemini-2.0-flash';
+    const totalTokens = result.usage?.totalTokens || Math.ceil(text.length / 4);
 
     try {
       const prisma = getSystemClient();
@@ -716,9 +701,9 @@ const generateFromTemplate = async ({ templateName, params, apiKey, userId, coll
           userId: String(userId),
           collegeId: String(collegeId),
           action: `generate-${templateName}`,
-          model: modelName,
+          model: modelUsed, // Fixed: was modelName (ReferenceError)
           duration: Date.now() - startTime,
-          tokensUsed: text.length
+          tokensUsed: totalTokens // Fixed: exact tokens rather than char count
         }
       });
     } catch (e) {}

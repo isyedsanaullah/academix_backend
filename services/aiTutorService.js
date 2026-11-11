@@ -11,6 +11,7 @@ const AI_CONFIG = require('../config/aiConfig');
 const { searchRelevantChunks } = require('./ragKnowledgeService');
 const { recordAndDebitUsage, assertAICreditsAvailable } = require('./aiLedgerService');
 const { getEntitlements } = require('./entitlements');
+const aiMicroserviceClient = require('./aiMicroserviceClient');
 
 class DailyTutorLimitReachedError extends Error {
   constructor(message, details = {}) {
@@ -133,43 +134,69 @@ async function askTutor({
     limit: 3,
   });
 
-  // 5. Synthesize grounded answer
-  let answer;
+  // 5. Synthesize grounded answer with Real LLM via AI Microservice Gateway
   const citations = chunks.map((c) => ({
     bookTitle: c.bookTitle,
     chapterName: c.chapterName,
     pageNumber: c.pageNumber,
   }));
 
-  if (chunks.length > 0) {
-    const topChunk = chunks[0];
-    answer = `Based on your curriculum textbook (${topChunk.bookTitle || 'Official Textbook'}, Chapter: ${topChunk.chapterName || 'General'}, Page ${topChunk.pageNumber}):\n\n` +
-      `"${topChunk.chunkText}"\n\n` +
-      `Summary explanation: In response to "${question}", the core curriculum concept states that ${topChunk.chunkText.toLowerCase().includes('force') ? 'force is directly proportional to rate of change of momentum (F = ma).' : 'this topic is structured as outlined in chapter ' + (topChunk.chapterName || 'syllabus') + '.'}`;
-  } else {
-    answer = `In response to your query regarding "${question}", please refer to your assigned course textbook for detailed derivations and review exercises.`;
+  const groundingText = chunks.length > 0
+    ? chunks.map((c, i) => `[Source ${i + 1}: ${c.bookTitle || 'Official Textbook'}, Chapter: ${c.chapterName || 'General'}, Page: ${c.pageNumber}]\n${c.chunkText}`).join('\n\n')
+    : 'No direct textbook passages retrieved for this question.';
+
+  const systemPrompt = `You are the College AI Tutor, an encouraging and academically rigorous virtual instructor.
+Your goal is to explain curriculum concepts clearly to students in clean Markdown.
+Base your explanations on the following official curriculum textbook excerpts:
+
+${groundingText}
+
+Guidelines:
+- Explain clearly with step-by-step logic, bold keywords, and concise examples.
+- If the question is outside the textbook, explain using general undergraduate science/humanities fundamentals while noting the textbook context.
+- Keep the tone pedagogical, patient, and direct.`;
+
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    { role: 'user', content: question },
+  ];
+
+  let answer = '';
+  let creditsDebited = 0;
+  let remainingCredits = 0;
+
+  try {
+    const completion = await aiMicroserviceClient.executeCompletion({
+      collegeId,
+      userId: studentId,
+      role: 'student',
+      planId,
+      featureKey: 'student-tutor',
+      messages,
+      temperature: 0.7,
+      maxTokens: 2048,
+    });
+
+    answer = completion.text || '';
+    creditsDebited = Number(completion.creditsDebited || 0);
+    remainingCredits = Number(completion.balanceAfter || 0);
+  } catch (err) {
+    // Graceful fallback if microservice is offline during transition
+    if (chunks.length > 0) {
+      const topChunk = chunks[0];
+      answer = `Based on your curriculum textbook (${topChunk.bookTitle || 'Official Textbook'}, Chapter: ${topChunk.chapterName || 'General'}, Page ${topChunk.pageNumber}):\n\n${topChunk.chunkText}`;
+    } else {
+      answer = `In response to your query regarding "${question}", please refer to your assigned course textbook for detailed review exercises.`;
+    }
   }
-
-  // 6. Debit AI credit ledger (Lite: 1 token = 1 credit)
-  const promptTokens = Math.max(30, Math.ceil(question.length / 4));
-  const outputTokens = Math.max(50, Math.ceil(answer.length / 4));
-
-  const debitResult = await recordAndDebitUsage({
-    collegeId,
-    featureKey: 'ai-tutor-chat',
-    modelTier: 'lite',
-    promptTokens,
-    outputTokens,
-    latencyMs: 120,
-  });
 
   return {
     answer,
     citations,
     chunksUsed: chunks.length,
     usage: usageInfo,
-    creditsDebited: debitResult.debited,
-    remainingCredits: debitResult.balances.totalBalance,
+    creditsDebited,
+    remainingCredits,
   };
 }
 

@@ -82,6 +82,7 @@ exports.sendMessage = async (req, res, next) => {
           apiKey,
           conversationHistory: messages.slice(0, -1),
           subject,
+          req,
           res
         });
       }
@@ -270,6 +271,7 @@ exports.sendMessage = async (req, res, next) => {
       apiKey,
       conversationHistory: messages.slice(0, -1),
       subject,
+      req,
       res
     });
   } catch (error) {

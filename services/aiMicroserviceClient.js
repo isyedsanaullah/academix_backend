@@ -12,6 +12,7 @@
  */
 
 const { generateServiceAssertion, ASSERTION_HEADER } = require('./aiServiceAssertion');
+const crypto = require('crypto');
 
 const AI_SERVICE_URL = (process.env.AI_SERVICE_URL || 'http://localhost:10001').replace(/\/+$/, '');
 const DEFAULT_TIMEOUT_MS = 15000; // 15 seconds for regular RPCs
@@ -149,10 +150,213 @@ async function deliverOutboxEvent({ eventId, eventType, collegeId, payload }) {
   return body;
 }
 
+/**
+ * Execute unary non-streaming completion through the centralized AI Gateway.
+ *
+ * @param {object} params
+ * @param {string} params.collegeId
+ * @param {string} params.userId
+ * @param {string} [params.role]
+ * @param {string} [params.planId]
+ * @param {string} [params.featureKey]
+ * @param {Array<{role: string, content: string}>} params.messages
+ * @param {number} [params.temperature]
+ * @param {number} [params.maxTokens]
+ * @param {string} [params.requestId]
+ * @returns {Promise<{ success: boolean, text: string, usage: object, creditsDebited: string, balanceAfter: string }>}
+ */
+async function executeCompletion({
+  collegeId,
+  userId,
+  role = 'student',
+  planId = 'standard',
+  featureKey = 'ai-chat',
+  messages = [],
+  temperature = 0.7,
+  maxTokens = 2048,
+  requestId,
+}) {
+  const token = generateServiceAssertion({
+    userId: String(userId),
+    collegeId: String(collegeId),
+    role,
+    planId,
+  });
+
+  const correlationId = requestId || crypto.randomUUID();
+  const url = `${AI_SERVICE_URL}/internal/v1/chat/completions`;
+
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+      [ASSERTION_HEADER]: token,
+      'X-Request-Id': correlationId,
+    },
+    body: JSON.stringify({
+      featureKey,
+      messages,
+      temperature,
+      maxTokens,
+    }),
+    signal: AbortSignal.timeout(60000), // 60s max for unary completions
+  });
+
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    throw new AIMicroserviceClientError(
+      body.message || `AI execution failed with status ${res.status}`,
+      res.status,
+      body.error || 'AI_EXECUTION_FAILED',
+      body
+    );
+  }
+
+  return body;
+}
+
+/**
+ * Stream chat completion from AI microservice and pipe SSE directly to Express response.
+ *
+ * @param {object} params
+ * @param {string} params.collegeId
+ * @param {string} params.userId
+ * @param {string} [params.role]
+ * @param {string} [params.planId]
+ * @param {string} [params.featureKey]
+ * @param {Array<{role: string, content: string}>} params.messages
+ * @param {number} [params.temperature]
+ * @param {number} [params.maxTokens]
+ * @param {object} params.req - Express Request
+ * @param {object} params.res - Express Response
+ * @param {function} [params.onChunk] - Callback receiving text deltas
+ * @param {function} [params.onDone] - Callback receiving terminal completion payload
+ */
+async function pipeChatStreamToExpress({
+  collegeId,
+  userId,
+  role = 'student',
+  planId = 'standard',
+  featureKey = 'ai-chat',
+  messages = [],
+  temperature = 0.7,
+  maxTokens = 2048,
+  req,
+  res,
+  onChunk,
+  onDone,
+}) {
+  const token = generateServiceAssertion({
+    userId: String(userId),
+    collegeId: String(collegeId),
+    role,
+    planId,
+  });
+
+  const correlationId = (req && req.headers && req.headers['x-request-id']) || crypto.randomUUID();
+  const url = `${AI_SERVICE_URL}/internal/v1/chat/stream`;
+
+  const abortController = new AbortController();
+  if (req && req.on) {
+    req.on('close', () => {
+      if (!res.writableEnded) {
+        abortController.abort();
+      }
+    });
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Accept': 'text/event-stream',
+      [ASSERTION_HEADER]: token,
+      'X-Request-Id': correlationId,
+    },
+    body: JSON.stringify({
+      featureKey,
+      messages,
+      temperature,
+      maxTokens,
+    }),
+    signal: abortController.signal,
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.json().catch(() => ({}));
+    if (response.status === 422) {
+      // Insufficient credits error
+      res.write(`data: ${JSON.stringify({
+        text: `⚠️ Institutional AI credit balance is depleted. Please contact your college administrator to recharge AI credits.`,
+        error: true,
+        insufficientCredits: true,
+        done: true,
+      })}\n\n`);
+      res.end();
+      return;
+    }
+
+    res.write(`data: ${JSON.stringify({
+      text: `Error connecting to AI service: ${errorBody.message || response.statusText}`,
+      error: true,
+      done: true,
+    })}\n\n`);
+    res.end();
+    return;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buffer = '';
+
+  try {
+    while (true) {
+      if (abortController.signal.aborted) break;
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+        res.write(`${trimmed}\n\n`);
+
+        if (trimmed.startsWith('data: ')) {
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+            if (data.text && !data.done && onChunk) {
+              onChunk(data.text);
+            }
+            if (data.done && onDone) {
+              onDone(data);
+            }
+          } catch {}
+        }
+      }
+    }
+  } catch (streamErr) {
+    if (!res.writableEnded) {
+      res.write(`data: ${JSON.stringify({ text: `Stream error: ${streamErr.message}`, done: true, error: true })}\n\n`);
+      res.end();
+    }
+  } finally {
+    reader.releaseLock();
+    if (!res.writableEnded) {
+      res.end();
+    }
+  }
+}
+
 module.exports = {
   checkHealth,
   ping,
   deliverOutboxEvent,
+  executeCompletion,
+  pipeChatStreamToExpress,
   AIMicroserviceClientError,
   AI_SERVICE_URL,
 };
