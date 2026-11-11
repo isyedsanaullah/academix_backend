@@ -40,11 +40,27 @@ async function dispatch(event) {
     case 'GUARDIAN_ABSENCE_NOTIFICATION':
       await handleGuardianAbsenceNotification(event.payload);
       break;
+    case 'AI_PURCHASE_APPROVED':
+    case 'AI_SUBSCRIPTION_SYNC':
+    case 'COLLEGE_AI_SUSPENDED':
+    case 'COLLEGE_AI_REACTIVATED':
+      await handleAIEvent(event);
+      break;
     case 'FAILING_TEST_EVENT_THROW':
       throw new Error('Simulated dispatch failure');
     default:
       console.warn('[outbox] Unknown eventType:', event.eventType);
   }
+}
+
+async function handleAIEvent(event) {
+  const { deliverOutboxEvent } = require('../services/aiMicroserviceClient');
+  await deliverOutboxEvent({
+    eventId: event.id,
+    eventType: event.eventType,
+    collegeId: event.college_id,
+    payload: event.payload,
+  });
 }
 
 async function handleReceiptEmail(payload) {

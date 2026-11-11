@@ -290,17 +290,63 @@ async function approvePayment(paymentId, adminUserId, opts = {}) {
     });
 
     // 14. Enqueue outbox events (post-commit side-effects)
+    const outboxEventsToEnqueue = [
+      {
+        eventType: 'RECEIPT_EMAIL',
+        college_id: college.id,
+        payload: { paymentId, collegeId: college.id, receiptNumber, verifiedAmount },
+      },
+      {
+        eventType: 'ENTITLEMENT_CHANGED',
+        college_id: college.id,
+        payload: { collegeId: college.id, trigger: 'SETTLEMENT_APPROVE' },
+      },
+    ];
+
+    // Check for AI Token Addons in lineItems
+    for (const item of lineItems.filter(i => i.itemType === 'ADDON' && String(i.addonType).startsWith('AI_TOKENS'))) {
+      const credits = item.addonType === 'AI_TOKENS_1M' ? 1000000 :
+                      item.addonType === 'AI_TOKENS_5M' ? 5000000 :
+                      item.addonType === 'AI_TOKENS_10M' ? 10000000 : 1000000;
+      outboxEventsToEnqueue.push({
+        eventType: 'AI_PURCHASE_APPROVED',
+        college_id: college.id,
+        payload: {
+          purchaseRequestId: paymentId,
+          collegeId: college.id,
+          credits,
+          packageCode: item.addonType,
+          amountPkr: item.amount || verifiedAmount,
+          receiptNumber,
+          approvedByUserId: adminUserId,
+          transactionReference: payment.transactionId,
+        },
+      });
+    }
+
+    // Emit AI_SUBSCRIPTION_SYNC on Renewal or Upgrade
+    if (['RENEWAL', 'UPGRADE'].includes(payment.type)) {
+      const targetPlan = payment.planId || college.planId || 'starter';
+      const periodEnd = collegeUpdates.periodEnd || college.periodEnd || new Date(now.getTime() + 30 * 86400000);
+      const nowPKT = new Date(Date.now() + 5 * 60 * 60 * 1000);
+      const cycle = `${nowPKT.getUTCFullYear()}-${String(nowPKT.getUTCMonth() + 1).padStart(2, '0')}`;
+
+      outboxEventsToEnqueue.push({
+        eventType: 'AI_SUBSCRIPTION_SYNC',
+        college_id: college.id,
+        payload: {
+          collegeId: college.id,
+          planId: targetPlan,
+          billingCycle: cycle,
+          periodStart: collegeUpdates.periodStart || now,
+          periodEnd,
+          reason: `Subscription ${payment.type} approved (${receiptNumber})`,
+        },
+      });
+    }
+
     await tx.outboxEvent.createMany({
-      data: [
-        {
-          eventType: 'RECEIPT_EMAIL',
-          payload: { paymentId, collegeId: college.id, receiptNumber, verifiedAmount },
-        },
-        {
-          eventType: 'ENTITLEMENT_CHANGED',
-          payload: { collegeId: college.id, trigger: 'SETTLEMENT_APPROVE' },
-        },
-      ],
+      data: outboxEventsToEnqueue,
     });
 
     return { receiptNumber, verifiedAmount, paymentId };
