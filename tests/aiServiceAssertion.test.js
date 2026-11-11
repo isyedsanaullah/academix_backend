@@ -64,3 +64,4 @@ assert.throws(() => {
 }, /invalid signature/);
 
 console.log('✅ All aiServiceAssertion tests passed successfully.');
+

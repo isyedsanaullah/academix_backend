@@ -95,3 +95,4 @@ module.exports = {
   ASSERTION_LIFETIME_SEC,
   ASSERTION_HEADER: 'X-Collegeshub-Assertion',
 };
+

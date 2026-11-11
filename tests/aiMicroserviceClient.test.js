@@ -23,3 +23,4 @@ assert.rejects(async () => {
 }, /eventId and eventType are required/);
 
 console.log('✅ aiMicroserviceClient unit tests passed successfully.');
+
