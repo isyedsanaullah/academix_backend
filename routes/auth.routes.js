@@ -8,7 +8,9 @@ const {
   recover2FA,
   disable2FA,
   listKnownDevices,
-  removeKnownDevice
+  removeKnownDevice,
+  send2FAEmailOtp,
+  verify2FAEmailOtp
 } = require('../controllers/twoFactor.controller');
 const protect = require('../middleware/auth');
 const { getSystemClient } = require('../config/prismaManager');
@@ -56,6 +58,8 @@ router.post('/2fa/setup', protectEnrollOrSession, setup2FA);
 router.post('/2fa/verify', protectEnrollOrSession, verify2FA);
 router.post('/2fa/validate', validate2FA);
 router.post('/2fa/recover', recover2FA);
+router.post('/2fa/email-otp', send2FAEmailOtp);
+router.post('/2fa/verify-email-otp', verify2FAEmailOtp);
 router.post('/2fa/disable', protect, disable2FA);
 router.get('/known-devices', protect, listKnownDevices);
 router.delete('/known-devices/:id', protect, removeKnownDevice);

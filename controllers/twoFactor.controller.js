@@ -318,11 +318,16 @@ async function validate2FA(req, res) {
     }
 
     if (user.totpLockedUntil && user.totpLockedUntil > new Date()) {
-      const remainingMin = Math.ceil((user.totpLockedUntil.getTime() - Date.now()) / 60000);
+      const remainingMs = user.totpLockedUntil.getTime() - Date.now();
+      const remainingMin = Math.ceil(remainingMs / 60000);
       return res.status(429).json({
         success: false,
         code: 'ACCOUNT_LOCKED_2FA',
-        message: `Account is temporarily locked due to too many failed 2FA attempts. Locked for ${remainingMin} more minutes.`
+        message: `Account is temporarily locked due to too many failed 2FA attempts. Locked for ${remainingMin} more minutes.`,
+        attemptsRemaining: 0,
+        lockedUntil: user.totpLockedUntil,
+        lockedMinutes: remainingMin,
+        remainingMs
       });
     }
 
@@ -347,11 +352,23 @@ async function validate2FA(req, res) {
         data: lockData
       });
 
-      return res.status(401).json({
+      const isLocked = nextFailures >= 5;
+      return res.status(isLocked ? 429 : 401).json({
         success: false,
-        code: verification.reason === 'REPLAYED_CODE' ? 'TOTP_CODE_REPLAYED' : 'INVALID_2FA_CODE',
-        message: verification.reason === 'REPLAYED_CODE' ? 'This code has already been used. Please wait for the next code.' : 'Invalid two-factor authentication code',
-        attemptsRemaining: Math.max(0, 5 - nextFailures)
+        code: isLocked
+          ? 'ACCOUNT_LOCKED_2FA'
+          : verification.reason === 'REPLAYED_CODE'
+            ? 'TOTP_CODE_REPLAYED'
+            : 'INVALID_2FA_CODE',
+        message: isLocked
+          ? 'Too many failed attempts. Account locked for 30 minutes.'
+          : verification.reason === 'REPLAYED_CODE'
+            ? 'This code has already been used. Please wait for the next code.'
+            : 'Invalid two-factor authentication code',
+        attemptsRemaining: Math.max(0, 5 - nextFailures),
+        isLocked,
+        lockedUntil: lockData.totpLockedUntil || null,
+        lockedMinutes: isLocked ? 30 : null
       });
     }
 
@@ -489,6 +506,212 @@ async function recover2FA(req, res) {
   }
 }
 
+// In-memory cache for 2FA email OTPs (10-minute expiry)
+const emailOtpStore = new Map();
+
+/**
+ * POST /api/auth/2fa/email-otp
+ * Dispatches a 6-digit one-time code to the user's verified email address
+ * as an alternative to the Authenticator app.
+ */
+async function send2FAEmailOtp(req, res) {
+  try {
+    const { preAuthToken } = req.body;
+    const prisma = getPrisma();
+
+    if (!preAuthToken) {
+      return res.status(400).json({ success: false, message: 'preAuthToken is required' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(preAuthToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ success: false, code: 'INVALID_PREAUTH_TOKEN', message: 'Pre-auth token invalid or expired' });
+    }
+
+    if (decoded.scope !== 'PREAUTH_2FA') {
+      return res.status(401).json({ success: false, code: 'INVALID_PREAUTH_TOKEN', message: 'Invalid token scope' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId }
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, message: 'User not found or inactive' });
+    }
+
+    if (user.totpLockedUntil && user.totpLockedUntil > new Date()) {
+      const remainingMin = Math.ceil((user.totpLockedUntil.getTime() - Date.now()) / 60000);
+      return res.status(429).json({
+        success: false,
+        code: 'ACCOUNT_LOCKED_2FA',
+        message: `Account is temporarily locked. Please try again in ${remainingMin} minutes.`
+      });
+    }
+
+    // Rate-limit resends to 1 every 60 seconds
+    const existing = emailOtpStore.get(user.id);
+    if (existing && Date.now() < existing.createdAt + 60 * 1000) {
+      const waitSec = Math.ceil((existing.createdAt + 60 * 1000 - Date.now()) / 1000);
+      return res.status(429).json({
+        success: false,
+        message: `Please wait ${waitSec} seconds before requesting a new code.`
+      });
+    }
+
+    // Generate random 6-digit numeric OTP
+    const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
+    const bcrypt = require('bcryptjs');
+    const hashedCode = await bcrypt.hash(otpCode, 8);
+
+    emailOtpStore.set(user.id, {
+      hashedCode,
+      createdAt: Date.now(),
+      expiresAt: Date.now() + 10 * 60 * 1000,
+      attemptsRemaining: 5
+    });
+
+    // Mask user email for privacy (e.g. ad***@collegeshub.com)
+    const [namePart, domainPart] = user.email.split('@');
+    const maskedEmail = namePart.length <= 2
+      ? `${namePart}***@${domainPart}`
+      : `${namePart.slice(0, 2)}***${namePart.slice(-1)}@${domainPart}`;
+
+    // Send email using mailService
+    const { send, buildCollegeshubTemplate } = require('../services/mailService');
+    const bodyHtml = `
+      <p style="margin:0 0 16px 0;">Hello <strong>${user.name || 'there'}</strong>,</p>
+      <p style="margin:0 0 20px 0;">You requested an email verification code to sign in to your CollegesHub account.</p>
+      <div style="background:#F1F5F9;border:1px dashed #0A4D94;border-radius:12px;padding:20px;text-align:center;margin:0 0 20px 0;">
+        <span style="font-family:monospace;font-size:36px;font-weight:800;letter-spacing:8px;color:#0A4D94;">${otpCode}</span>
+        <p style="margin:8px 0 0 0;font-size:12px;color:#64748B;">Valid for 10 minutes · Do not share this code with anyone</p>
+      </div>
+      <p style="margin:0;font-size:13px;color:#64748B;">If you did not request this login code, please secure your account immediately.</p>
+    `;
+
+    const html = buildCollegeshubTemplate({
+      title: '🔐 Your Login Verification Code',
+      preheader: `Your CollegesHub login code is ${otpCode}`,
+      bodyHtml
+    });
+
+    await send({
+      to: user.email,
+      subject: `🔐 ${otpCode} is your CollegesHub login verification code`,
+      html,
+      text: `Your CollegesHub login verification code is: ${otpCode}\nThis code is valid for 10 minutes.`
+    }).catch(err => {
+      console.error('[send2FAEmailOtp] Email sending error:', err.message);
+    });
+
+    return res.json({
+      success: true,
+      message: `Verification code sent to ${maskedEmail}`,
+      maskedEmail
+    });
+  } catch (err) {
+    console.error('[send2FAEmailOtp] Error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to send email verification code', error: err.message });
+  }
+}
+
+/**
+ * POST /api/auth/2fa/verify-email-otp
+ * Verifies the 6-digit email OTP and issues the final session token.
+ */
+async function verify2FAEmailOtp(req, res) {
+  try {
+    const { preAuthToken, code } = req.body;
+    const prisma = getPrisma();
+
+    if (!preAuthToken || !code) {
+      return res.status(400).json({ success: false, message: 'preAuthToken and 6-digit code are required' });
+    }
+
+    let decoded;
+    try {
+      decoded = jwt.verify(preAuthToken, process.env.JWT_SECRET);
+    } catch {
+      return res.status(401).json({ success: false, code: 'INVALID_PREAUTH_TOKEN', message: 'Pre-auth token invalid or expired' });
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId }
+    });
+
+    if (!user || !user.isActive) {
+      return res.status(401).json({ success: false, message: 'User not found or inactive' });
+    }
+
+    const record = emailOtpStore.get(user.id);
+    if (!record || Date.now() > record.expiresAt) {
+      emailOtpStore.delete(user.id);
+      return res.status(400).json({
+        success: false,
+        code: 'OTP_EXPIRED',
+        message: 'Email verification code has expired. Please request a new one.'
+      });
+    }
+
+    const bcrypt = require('bcryptjs');
+    const isMatch = await bcrypt.compare(String(code).trim(), record.hashedCode);
+    if (!isMatch) {
+      record.attemptsRemaining -= 1;
+      if (record.attemptsRemaining <= 0) {
+        emailOtpStore.delete(user.id);
+        return res.status(401).json({
+          success: false,
+          code: 'OTP_MAX_ATTEMPTS',
+          message: 'Too many incorrect email code attempts. Please request a new code.',
+          attemptsRemaining: 0
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        code: 'INVALID_EMAIL_CODE',
+        message: 'Invalid verification code. Please check your email.',
+        attemptsRemaining: record.attemptsRemaining
+      });
+    }
+
+    // Success: consume OTP
+    emailOtpStore.delete(user.id);
+
+    // Register device and clear failed markers
+    await processKnownDevice(req, res, user);
+    clearFailedPasswordAttempt(user.id);
+    clearFailedPasswordAttempt(user.email);
+
+    // Issue session token
+    let collegeTokenEpoch = 0;
+    if (user.college_id) {
+      const col = await prisma.college.findUnique({ where: { id: user.college_id }, select: { tokenEpoch: true } });
+      if (col) collegeTokenEpoch = col.tokenEpoch || 0;
+    }
+
+    const token = generateToken(user.id, user.college_id || null, user.role, collegeTokenEpoch);
+
+    return res.json({
+      success: true,
+      message: 'Email verification successful',
+      token,
+      user: {
+        _id: user.id,
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        college_id: user.college_id
+      }
+    });
+  } catch (err) {
+    console.error('[verify2FAEmailOtp] Error:', err);
+    return res.status(500).json({ success: false, message: 'Verification failed', error: err.message });
+  }
+}
+
 /**
  * POST /api/auth/2fa/disable
  * Disables 2FA. Super Admin accounts cannot disable 2FA.
@@ -599,5 +822,7 @@ module.exports = {
   isKnownDevice,
   recordFailedPasswordAttempt,
   hasRecentFailedPassword,
-  clearFailedPasswordAttempt
+  clearFailedPasswordAttempt,
+  send2FAEmailOtp,
+  verify2FAEmailOtp
 };
