@@ -53,7 +53,16 @@ const generateQuestionsWithAI = async (apiKey, prompt, telemetryContext = {}) =>
     throw lastErr || new Error('Failed to generate quiz questions via OpenRouter API');
   } else {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+    const modelsToTry = [
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-2.5-flash-lite',
+      'gemini-1.5-flash',
+      'gemini-flash-latest',
+      'gemini-flash-lite-latest',
+      'gemini-3.5-flash-lite',
+      'gemini-3.8-flash'
+    ];
     let lastErr = null;
 
     for (const m of modelsToTry) {
