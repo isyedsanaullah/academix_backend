@@ -7,7 +7,8 @@ const { trackGeminiCall } = require('../services/aiUsageTracker');
 // @access  Private (any authenticated user)
 exports.saveKey = async (req, res, next) => {
   try {
-    const { apiKey, provider = 'gemini' } = req.body;
+    const { apiKey } = req.body;
+    let provider = req.body.provider;
 
     if (!apiKey || apiKey.trim().length < 10) {
       return res.status(400).json({
@@ -16,8 +17,13 @@ exports.saveKey = async (req, res, next) => {
       });
     }
 
+    const trimmedKey = apiKey.trim();
+    if (!provider) {
+      provider = trimmedKey.startsWith('sk-or-') ? 'openrouter' : 'gemini';
+    }
+
     // Encrypt the key
-    const { encrypted, iv } = encrypt(apiKey.trim());
+    const { encrypted, iv } = encrypt(trimmedKey);
     const prisma = getSystemClient();
 
     // Upsert — one key per user per provider
@@ -186,7 +192,14 @@ exports.testKey = async (req, res, next) => {
         });
       }
 
-      keyToTest = decrypt(savedKey.encryptedKey, savedKey.iv);
+      try {
+        keyToTest = decrypt(savedKey.encryptedKey, savedKey.iv);
+      } catch (decErr) {
+        return res.status(400).json({
+          success: false,
+          message: 'Saved API key could not be decrypted. Please re-enter and save your API key.'
+        });
+      }
     }
 
     if (!keyToTest) {
@@ -237,7 +250,15 @@ exports.testKey = async (req, res, next) => {
     const { GoogleGenerativeAI } = require('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(keyToTest);
 
-    const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
+    // Current Gemini models in order of priority (handles retirements and rate spikes)
+    const modelsToTry = [
+      'gemini-3.5-flash-lite',
+      'gemini-3.8-flash',
+      'gemini-flash-latest',
+      'gemini-2.5-flash',
+      'gemini-2.0-flash',
+      'gemini-1.5-flash'
+    ];
     let lastError = null;
 
     for (const modelName of modelsToTry) {
@@ -262,7 +283,14 @@ exports.testKey = async (req, res, next) => {
         lastError = err;
         const msg = (err.message || '').toLowerCase();
         const status = err.status || err.statusCode || err.httpStatusCode || 0;
-        if (status === 400 || status === 403 || msg.includes('api_key') || msg.includes('invalid') || msg.includes('not found') || msg.includes('api key')) {
+
+        // If model is retired or not found on this account, skip to next model!
+        if (status === 404 || msg.includes('not found') || msg.includes('no longer available')) {
+          continue;
+        }
+
+        // Only abort if Google explicitly states the API key itself is invalid
+        if (status === 400 || status === 403 || msg.includes('api_key_invalid') || msg.includes('api key not valid')) {
           return res.status(400).json({
             success: false,
             message: 'Google Gemini API key is invalid or has been revoked. Please generate a new key from aistudio.google.com'
