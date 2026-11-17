@@ -590,6 +590,12 @@ model College {
   // Phase 10: Infrastructure, Multi-Campus & Compliance
   ipAllowlistMode          String?  @default("OFF") // OFF | LOG_ONLY | ENFORCE
 
+  // Stage 0 (T0.1): Three-Plan Grandfathering & Custom Quote fields
+  isCustomQuote            Boolean   @default(false)
+  customQuoteNotes         String?
+  grandfatheredUntil       DateTime?
+  grandfatherReason        String?
+
   isTest                   Boolean  @default(false)
 
   @@index([status])
@@ -2327,6 +2333,7 @@ model CollegeAddon {
   college_id      String
   addonType       String    // STUDENTS, STAFF, ADMINS, STORAGE_GB, APPLICATIONS, CAMPUS, MODULE_LIBRARY, MODULE_CANTEEN, MODULE_TRANSPORT, MODULE_HOSTEL
   quantity        Int       @default(1)
+  status          String    @default("ACTIVE") // ACTIVE, SUSPENDED_BY_DOWNGRADE, EXPIRED
   startsAt        DateTime  @default(now())
   expiresAt       DateTime
   sourcePaymentId String?
@@ -4201,9 +4208,13 @@ model PendingAgentAction {
   actionType   String   // 'FEE_REMINDER_BROADCAST' | 'TEACHER_SUBSTITUTION' | 'ATTENDANCE_ANOMALY' | 'DEFENDER_SUMMON'
   title        String
   description  String
-  payloadJson  Json
-  status       String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | EXECUTED | DISMISSED
-  executedById String?
+  payloadJson          Json
+  status               String    @default("PENDING_APPROVAL") // PENDING_APPROVAL | EXECUTED | DISMISSED
+  requestedById        String?
+  requestedByRole      String?
+  affectedRecordsCount Int       @default(1)
+  diffPreviewJson      Json?
+  executedById         String?
   executedAt   DateTime?
   createdAt    DateTime  @default(now())
 
