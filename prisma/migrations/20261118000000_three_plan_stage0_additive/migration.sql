@@ -20,3 +20,4 @@ ALTER TABLE "PendingAgentAction"
   ADD COLUMN IF NOT EXISTS "requestedByRole" TEXT,
   ADD COLUMN IF NOT EXISTS "affectedRecordsCount" INTEGER NOT NULL DEFAULT 1,
   ADD COLUMN IF NOT EXISTS "diffPreviewJson" JSONB;
+
