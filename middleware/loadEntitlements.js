@@ -1,14 +1,18 @@
+'use strict';
+
 // middleware/loadEntitlements.js
-// Replaces middleware/planGate.js. Same response shape ({ success:false, message, disabled:true }) so the frontend keeps working,
-// plus a machine-readable `code` and `reason`.
-//
-// Order in routes (as today):  protect, tenantContext, featureGate('attendance')
+// Unified through services/entitlements.js while preserving legacy response shape
+// ({ success:false, message, disabled:true }) and req.entitlements structure.
 const { getSystemClient } = require('../config/prismaManager');
-const { resolveCollege, legacyEffectiveKeys } = require('../services/collegeAdapter');
-const { LEGACY_KEY_MAP } = require('../services/capabilityCatalog');
+const { isThreePlanMode } = require('../config/featureFlags');
+const {
+  getEntitlements: resolveFullEntitlements,
+  resolveFeatureState,
+  STATE_MESSAGES
+} = require('../services/entitlements');
 
 const TTL_MS = 60_000;
-const cache = new Map();                       // collegeId -> { at, resolved }
+const cache = new Map(); // collegeId -> { at, resolved }
 let flagsCache = { at: 0, flags: null };
 
 async function getFeatureFlags() {
@@ -26,7 +30,7 @@ async function getFeatureFlags() {
   }
 }
 
-const clearEntitlementCache = id => {
+const clearEntitlementCache = (id) => {
   if (id) {
     cache.delete(id);
   } else {
@@ -35,62 +39,37 @@ const clearEntitlementCache = id => {
   }
 };
 
+function toMiddlewareShape(ent) {
+  if (!ent) return { active: false, reason: 'COLLEGE_NOT_FOUND' };
+  return {
+    ...ent,
+    // Middleware consumers (`featureGate`, `/api/me/capabilities`) expect `features[key] -> { on, ... }`
+    features: ent.featureStates || {},
+    effectiveFeatures: ent.effectiveFeatures || ent.features || []
+  };
+}
+
 async function getEntitlements(collegeId) {
   const hit = cache.get(collegeId);
   if (hit && Date.now() - hit.at < TTL_MS) return hit.resolved;
-  const db = getSystemClient();
-  const college = await db.college.findUnique({
-    where: { id: collegeId },
-    select: {
-      id: true,
-      isActive: true,
-      subscription: true,
-      settings: true,
-      subscription_status: true,
-      feature_overrides: true,
-      subscriptionPeriods: {
-        where: { status: 'active' },
-        orderBy: { starts_at: 'desc' },
-        take: 1
-      }
+
+  try {
+    const flags = await getFeatureFlags();
+    const ent = await resolveFullEntitlements(collegeId, null, { flags });
+    const shaped = toMiddlewareShape(ent);
+    cache.set(collegeId, { at: Date.now(), resolved: shaped });
+    return shaped;
+  } catch (err) {
+    if (err.message && err.message.includes('not found')) {
+      return { active: false, reason: 'COLLEGE_NOT_FOUND' };
     }
-  });
-  if (!college) return { active: false, reason: 'COLLEGE_NOT_FOUND' };
-  // groups: prefer the Group table (live), fall back to onboarding settings
-  const groups = await db.group.findMany({ where: { college_id: collegeId, isActive: true }, select: { name: true }, distinct: ['name'] });
-  const flags = await getFeatureFlags();
-  const resolved = resolveCollege(college, { groupNames: groups.map(g => g.name), flags });
-  if (resolved.active) {
-    resolved.effectiveFeatures = legacyEffectiveKeys(resolved);   // same shape the Sidebar reads today
-    for (const [legacyKey, targets] of Object.entries(LEGACY_KEY_MAP)) {
-      if (!resolved.features[legacyKey]) {
-        const isLegacyOn = resolved.effectiveFeatures.includes(legacyKey);
-        if (isLegacyOn) {
-          resolved.features[legacyKey] = { on: true, source: 'PLAN' };
-        } else {
-          const firstTargetState = targets.map(t => resolved.features[t]).find(s => s && !s.on);
-          resolved.features[legacyKey] = {
-            on: false,
-            reason: firstTargetState?.reason || 'NOT_IN_PLAN',
-            blockedBy: firstTargetState?.blockedBy
-          };
-        }
-      }
-    }
+    throw err;
   }
-  cache.set(collegeId, { at: Date.now(), resolved });
-  return resolved;
 }
 
 const MESSAGES = {
-  NOT_IN_PLAN: 'This feature is not included in your plan.',
-  COLLEGE_DISABLED: 'This feature is switched off for your institution.',
-  REVOKED: 'This feature is disabled for your institution.',
-  DEPENDENCY_OFF: 'This feature needs another feature that is switched off.',
-  CAPABILITY_UNAVAILABLE: 'This feature needs a method that is switched off (no alternative is available).',
-  GROUP_NOT_OFFERED: 'Your college does not offer a group that uses this feature.',
-  KILL_SWITCH: 'This feature is temporarily unavailable due to system maintenance.',
-  RELEASE_STAGE: 'This feature is not yet available in your release tier.',
+  ...STATE_MESSAGES,
+  RELEASE_STAGE: 'This feature is not yet available in your release tier.'
 };
 
 /** Attach entitlements to the request without gating (for /api/me/capabilities). */
@@ -105,28 +84,63 @@ const loadEntitlements = async (req, res, next) => {
 
 const deny = (res, status, body) => res.status(status).json({ success: false, ...body });
 
-/** featureGate('attendance')  or  featureGate(['gate-scanner','gate-manual-log']) = any one of them */
+/** featureGate('attendance') or featureGate(['gate-scanner','gate-manual-log']) = any one of them */
 const featureGate = (keyOrKeys) => async (req, res, next) => {
   try {
-    if (req.user?.role === 'superAdmin') return next();                       // same bypass as planGate today
+    if (req.user?.role === 'superAdmin') return next();
     const collegeId = req.collegeId || req.user?.college_id;
     if (!collegeId) return deny(res, 403, { message: 'No college associated with this account' });
     const ent = req.entitlements || (req.entitlements = await getEntitlements(collegeId));
-    if (!ent.active) return deny(res, 403, { message: 'College account or subscription is not active', code: ent.reason, disabled: true });
+    if (!ent.active) {
+      return deny(res, 403, {
+        message: 'College account or subscription is not active',
+        code: ent.reason,
+        disabled: true
+      });
+    }
 
     const keys = Array.isArray(keyOrKeys) ? keyOrKeys : [keyOrKeys];
-    const states = keys.map(k => ent.features[k]);
-    if (!states.some(s => s?.on)) {
+    const states = keys.map(k => resolveFeatureState({ ...ent, featureStates: ent.features }, k));
+    const activeStates = states.filter(s => s?.on);
+
+    if (activeStates.length === 0) {
       const s = states[0];
       return deny(res, 403, {
         message: MESSAGES[s?.reason] || 'This feature is disabled for your institution.',
-        code: 'FEATURE_UNAVAILABLE', feature: keys.join(','), reason: s?.reason || 'UNKNOWN',
-        blockedBy: s?.blockedBy || undefined, upgrade: s?.reason === 'NOT_IN_PLAN', disabled: true, currentPlan: ent.planId,
+        code: 'FEATURE_UNAVAILABLE',
+        feature: keys.join(','),
+        reason: s?.reason || 'UNKNOWN',
+        blockedBy: s?.blockedBy || undefined,
+        upgrade: s?.reason === 'NOT_IN_PLAN',
+        disabled: true,
+        currentPlan: ent.planId
       });
     }
-    if (ent.readOnly && req.method !== 'GET') return deny(res, 403, { message: 'Subscription grace period: read-only', code: 'READ_ONLY_GRACE' });
+
+    // T1.3: Block unbuilt services (`hasWorkingImplementation === false`) when strict coming-soon locking is active;
+    // otherwise log for 48-hour soak audit.
+    const hasWorking = activeStates.some(s => s.hasWorkingImplementation !== false);
+    if (!hasWorking) {
+      const enforceComingSoon = process.env.ENFORCE_SUBSCRIPTION_GATES === 'true'
+        && (isThreePlanMode() || process.env.ENFORCE_COMING_SOON_LOCKS === 'true');
+      if (enforceComingSoon) {
+        return deny(res, 403, {
+          message: MESSAGES.COMING_SOON,
+          code: 'FEATURE_COMING_SOON',
+          feature: keys.join(','),
+          disabled: true,
+          currentPlan: ent.planId
+        });
+      } else {
+        console.warn(`[FEATURE GATE LOG-ONLY] Unbuilt feature '${keys.join(',')}' (hasWorkingImplementation=false) on ${req.method} ${req.originalUrl} (College: ${collegeId}, Plan: ${ent.planId})`);
+      }
+    }
+
+    if (ent.readOnly && req.method !== 'GET') {
+      return deny(res, 403, { message: 'Subscription grace period: read-only', code: 'READ_ONLY_GRACE' });
+    }
     req.collegePlan = ent.planId;
-    req.effectiveFeatures = ent.effectiveFeatures;                            // same property planGate sets today
+    req.effectiveFeatures = ent.effectiveFeatures;
     next();
   } catch (e) { next(e); }
 };

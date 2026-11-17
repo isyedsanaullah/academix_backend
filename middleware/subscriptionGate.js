@@ -1,13 +1,12 @@
-const { getEntitlements } = require('../services/entitlements');
+'use strict';
+
+const { isThreePlanMode } = require('../config/featureFlags');
+const { getEntitlements, resolveFeatureState } = require('../services/entitlements');
 
 /**
  * Subscription Gate Middleware Factory
- * Protects endpoints by verifying:
- * 1. Read-only lock enforcement on non-safe HTTP methods (POST, PUT, PATCH, DELETE)
- * 2. Feature entitlement based on plan tier, active add-ons, and overrides.
- *
- * Runs in log-only mode when ENFORCE_SUBSCRIPTION_GATES !== 'true' to allow safe validation.
- * Super Admins bypass all gates globally.
+ * Unified through services/entitlements.js (supports all canonical & alias keys).
+ * Super Admins bypass all gates globally for preview and platform operations.
  *
  * @param {string} [requiredFeatureKey] - Optional feature slug or legacy alias
  */
@@ -30,8 +29,7 @@ function subscriptionGate(requiredFeatureKey = null) {
       }
 
       // 3. Resolve full entitlements snapshot
-      const entitlements = await getEntitlements(collegeId);
-      req.entitlements = entitlements;
+      const entitlements = req.entitlements || (req.entitlements = await getEntitlements(collegeId));
 
       // Check Suspended state - blocks everything
       if (entitlements.subStatus === 'SUSPENDED') {
@@ -46,7 +44,8 @@ function subscriptionGate(requiredFeatureKey = null) {
 
       // 4. Check View-Only (Read-Only) Lock on mutating requests
       const isMutatingMethod = !['GET', 'HEAD', 'OPTIONS'].includes(req.method.toUpperCase());
-      const isWhitelistedInReadOnly = (req.baseUrl && req.baseUrl.includes('exports')) || (req.originalUrl && req.originalUrl.includes('/api/exports'));
+      const isWhitelistedInReadOnly = (req.baseUrl && req.baseUrl.includes('exports'))
+        || (req.originalUrl && req.originalUrl.includes('/api/exports'));
 
       if (entitlements.isReadOnly && isMutatingMethod && !isWhitelistedInReadOnly) {
         if (enforceStrict) {
@@ -64,9 +63,10 @@ function subscriptionGate(requiredFeatureKey = null) {
         }
       }
 
-      // 5. Check Feature Entitlement if a specific feature is requested
+      // 5. Check Feature Entitlement (via alias-aware state resolution)
       if (requiredFeatureKey) {
-        const hasFeature = entitlements.features.includes(requiredFeatureKey);
+        const state = resolveFeatureState(entitlements, requiredFeatureKey);
+        const hasFeature = Boolean(state?.on);
 
         if (!hasFeature) {
           if (enforceStrict) {
@@ -75,10 +75,25 @@ function subscriptionGate(requiredFeatureKey = null) {
               code: 'FEATURE_NOT_IN_PLAN',
               message: `The feature '${requiredFeatureKey}' is not included in the ${entitlements.planId.toUpperCase()} tier or active add-ons.`,
               feature: requiredFeatureKey,
+              canonicalKey: state?.canonicalKey || requiredFeatureKey,
               currentPlan: entitlements.planId
             });
           } else {
-            console.warn(`[SUBSCRIPTION GATE LOG-ONLY] Missing feature '${requiredFeatureKey}' on ${req.method} ${req.originalUrl} (College: ${collegeId}, Plan: ${entitlements.planId})`);
+            console.warn(`[SUBSCRIPTION GATE LOG-ONLY] Missing feature '${requiredFeatureKey}' (canonical: '${state?.canonicalKey || requiredFeatureKey}') on ${req.method} ${req.originalUrl} (College: ${collegeId}, Plan: ${entitlements.planId})`);
+          }
+        } else if (state.hasWorkingImplementation === false) {
+          const enforceComingSoon = enforceStrict && (isThreePlanMode() || process.env.ENFORCE_COMING_SOON_LOCKS === 'true');
+          if (enforceComingSoon) {
+            return res.status(403).json({
+              success: false,
+              code: 'FEATURE_COMING_SOON',
+              message: `The feature '${requiredFeatureKey}' is coming soon and is not yet available.`,
+              feature: requiredFeatureKey,
+              canonicalKey: state.canonicalKey,
+              currentPlan: entitlements.planId
+            });
+          } else {
+            console.warn(`[SUBSCRIPTION GATE LOG-ONLY] Unbuilt feature '${requiredFeatureKey}' (hasWorkingImplementation=false) on ${req.method} ${req.originalUrl} (College: ${collegeId}, Plan: ${entitlements.planId})`);
           }
         }
       }
@@ -97,4 +112,3 @@ function subscriptionGate(requiredFeatureKey = null) {
 
 module.exports = subscriptionGate;
 module.exports.subscriptionGate = subscriptionGate;
-

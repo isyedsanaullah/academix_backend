@@ -1,22 +1,22 @@
-const { getSystemClient } = require('../config/prismaManager');
+'use strict';
+
+const { isThreePlanMode } = require('../config/featureFlags');
 const { PLAN_LEVEL, normalizePlanId } = require('../config/planConstants');
-const { resolveCollegeFeatures, PLAN_FEATURES } = require('../config/featureRegistry');
+const { PLAN_FEATURES } = require('../config/featureRegistry');
+const { getEntitlements, resolveFeatureState } = require('../services/entitlements');
 
 /**
- * Plan & Feature Gate Middleware
- * Checks if the college's effective subscription configuration includes the required feature.
- * Resolves: Plan Baseline -> College Overrides -> Deterministic Dependency Rules.
+ * Legacy Plan & Feature Gate Middleware
+ * Unified through services/entitlements.js (Stage 1 T1.2).
  * Super Admins bypass all plan & feature gates globally.
  */
 const planGate = (requiredFeature) => {
   return async (req, res, next) => {
     try {
-      // Super admins bypass all feature gates globally
       if (req.user && req.user.role === 'superAdmin') {
         return next();
       }
 
-      // Extract college ID from tenant context or user session
       const collegeId = req.collegeId || req.user?.college_id;
       if (!collegeId) {
         return res.status(403).json({
@@ -25,65 +25,62 @@ const planGate = (requiredFeature) => {
         });
       }
 
-      const systemDb = getSystemClient();
-      const college = await systemDb.college.findUnique({
-        where: { id: collegeId },
-        select: { subscription: true, isActive: true }
-      });
-
-      if (!college) {
-        return res.status(404).json({
-          success: false,
-          message: 'College not found'
-        });
+      let ent;
+      try {
+        ent = req.entitlements || (req.entitlements = await getEntitlements(collegeId));
+      } catch (err) {
+        if (err.message && err.message.includes('not found')) {
+          return res.status(404).json({ success: false, message: 'College not found' });
+        }
+        throw err;
       }
 
-      // Check if college account is active
-      if (!college.isActive) {
+      if (!ent.active) {
         return res.status(403).json({
           success: false,
-          message: 'College account is deactivated'
+          message: ent.reason === 'SUSPENDED'
+            ? 'College subscription is suspended. Contact administrator.'
+            : 'College account is deactivated'
         });
       }
 
-      const subscription = (typeof college.subscription === 'object' && college.subscription !== null)
-        ? college.subscription
-        : {};
-
-      // Check subscription status
-      if (subscription.status === 'suspended') {
-        return res.status(403).json({
-          success: false,
-          message: 'College subscription is suspended. Contact administrator.'
-        });
-      }
-
-      if (subscription.status === 'expired') {
+      if (ent.readOnlyReason === 'SUBSCRIPTION_EXPIRED' && process.env.ENFORCE_SUBSCRIPTION_GATES === 'true') {
         return res.status(403).json({
           success: false,
           message: 'College subscription has expired. Please renew.'
         });
       }
 
-      // Resolve effective features dynamically
-      const plan = normalizePlanId(subscription.plan);
-      const featureOverrides = subscription.featureOverrides || {};
-      const resolved = resolveCollegeFeatures(plan, featureOverrides);
-
-      // Check if the required feature is effectively enabled
-      if (!resolved.effectiveKeys.includes(requiredFeature)) {
+      const state = resolveFeatureState(ent, requiredFeature);
+      if (!state?.on) {
         return res.status(403).json({
           success: false,
-          message: `This feature is disabled for your institution.`,
+          message: 'This feature is disabled for your institution.',
           feature: requiredFeature,
           disabled: true,
-          currentPlan: plan
+          currentPlan: ent.planId
         });
       }
 
-      // Attach resolved plan & effective features to request for downstream handlers
-      req.collegePlan = plan;
-      req.effectiveFeatures = resolved.effectiveKeys;
+      if (state.hasWorkingImplementation === false) {
+        const enforceComingSoon = process.env.ENFORCE_SUBSCRIPTION_GATES === 'true'
+          && (isThreePlanMode() || process.env.ENFORCE_COMING_SOON_LOCKS === 'true');
+        if (enforceComingSoon) {
+          return res.status(403).json({
+            success: false,
+            code: 'FEATURE_COMING_SOON',
+            message: 'This feature is coming soon and is not yet available.',
+            feature: requiredFeature,
+            disabled: true,
+            currentPlan: ent.planId
+          });
+        } else {
+          console.warn(`[PLAN GATE LOG-ONLY] Unbuilt feature '${requiredFeature}' (hasWorkingImplementation=false) on ${req.method} ${req.originalUrl} (College: ${collegeId}, Plan: ${ent.planId})`);
+        }
+      }
+
+      req.collegePlan = ent.planId;
+      req.effectiveFeatures = ent.effectiveFeatures;
       next();
     } catch (error) {
       next(error);
@@ -92,8 +89,7 @@ const planGate = (requiredFeature) => {
 };
 
 /**
- * Minimum plan level check
- * Usage: planGate.minPlan('standard')
+ * Minimum plan level check (also unified through entitlements.js)
  */
 planGate.minPlan = (minPlan) => {
   return async (req, res, next) => {
@@ -110,36 +106,39 @@ planGate.minPlan = (minPlan) => {
         });
       }
 
-      const systemDb = getSystemClient();
-      const college = await systemDb.college.findUnique({
-        where: { id: collegeId },
-        select: { subscription: true, isActive: true }
-      });
+      let ent;
+      try {
+        ent = req.entitlements || (req.entitlements = await getEntitlements(collegeId));
+      } catch (err) {
+        if (err.message && err.message.includes('not found')) {
+          return res.status(403).json({ success: false, message: 'College not found or deactivated' });
+        }
+        throw err;
+      }
 
-      if (!college || !college.isActive) {
+      if (!ent.active) {
         return res.status(403).json({
           success: false,
           message: 'College not found or deactivated'
         });
       }
 
-      const subscription = college.subscription || {};
-      const plan = normalizePlanId(subscription.plan);
-      const required = PLAN_LEVEL[minPlan] || 0;
-      const current = PLAN_LEVEL[plan] || 0;
+      const normalizedMin = normalizePlanId(minPlan);
+      const required = PLAN_LEVEL[normalizedMin] || 0;
+      const current = PLAN_LEVEL[ent.planId] || 0;
 
       if (current < required) {
         return res.status(403).json({
           success: false,
-          message: `This feature requires at least the ${minPlan.toUpperCase()} plan. Current: ${plan.toUpperCase()}`,
-          currentPlan: plan,
-          requiredPlan: minPlan,
+          message: `This feature requires at least the ${normalizedMin.toUpperCase()} plan. Current: ${ent.planId.toUpperCase()}`,
+          currentPlan: ent.planId,
+          requiredPlan: normalizedMin,
           disabled: true,
           upgrade: true
         });
       }
 
-      req.collegePlan = plan;
+      req.collegePlan = ent.planId;
       next();
     } catch (error) {
       next(error);
