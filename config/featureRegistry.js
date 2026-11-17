@@ -1,4 +1,5 @@
 const { PLAN_LEVEL, normalizePlanId } = require('./planConstants');
+const { isThreePlanMode } = require('./featureFlags');
 
 /**
  * Academix Master Canonical Feature Registry
@@ -20,7 +21,8 @@ const CATEGORIES = [
   'AI & Intelligence Suite'
 ];
 
-const FEATURE_REGISTRY = [
+// Raw legacy 161-item list; exported FEATURE_REGISTRY dynamically switches via isThreePlanMode()
+const RAW_FEATURE_REGISTRY = [
   // -------------------------------------------------------------
   // STARTER TIER (33 Services: 26 Live + 7 Coming Soon)
   // -------------------------------------------------------------
@@ -2617,8 +2619,9 @@ const FEATURE_REGISTRY = [
   }
 ];
 
-// Legacy feature key alias map for 100% backward compatibility
+// Complete canonical alias map (legacy route keys, capabilityCatalog keys, 39 failing route keys, featureMatrix UI keys)
 const FEATURE_ALIASES = {
+  // Original legacy aliases
   'core-academic': 'sessions-classes-groups',
   'attendance': 'daily-attendance',
   'timetable': 'section-timetable',
@@ -2634,20 +2637,373 @@ const FEATURE_ALIASES = {
   'visitors': 'visitor-management',
   'ai-chat': 'student-tutor-chat',
   'ai-pdf-chat': 'pdf-knowledge-library',
-  'ai-generators': 'ai-quiz-generator'
+  'ai-generators': 'ai-quiz-generator',
+  // capabilityCatalog.js diverging keys
+  'students': 'student-records',
+  'groups-subjects': 'group-subject-combinations',
+  'group-transfer': 'group-transfers',
+  'session-batches': 'two-year-batches',
+  'internal-tests': 'monthly-tests',
+  'admission-matric-capture': 'matric-result-intake',
+  'fees-basic': 'cash-fee-vouchers',
+  'gate-manual-log': 'manual-gate-log',
+  'assignments': 'assignments-submissions',
+  'college-branding': 'college-branding-signatures',
+  'student-photo': 'student-profile-photo',
+  'student-timetable': 'student-timetable-view',
+  'teacher-today': 'teacher-dashboard',
+  'role-themes': 'role-color-themes',
+  'media-optimization': 'image-resize-pdf-cleanup',
+  'audit-logs': 'audit-trail',
+  'trash': 'recycle-bin',
+  'circulars': 'circulars-notices',
+  'file-vault': 'file-vault-quota',
+  'bulk-import': 'bulk-csv-import',
+  'notice-board': 'student-diary-calendar',
+  'group-fee-seats': 'group-wise-fees-seats',
+  'id-cards': 'id-card-printing-qr',
+  'qr-verify': 'qr-verification',
+  'attendance-qr': 'gate-qr-auto-attendance',
+  'board-registration': 'board-registration-1st-year',
+  'board-exam-forms': 'board-exam-forms-2nd-year',
+  'board-slips': 'board-roll-slips-datesheet',
+  'board-results': 'board-gazette-entry',
+  'board-result-import': 'board-result-file-import',
+  'board-result-analysis': 'pass-percentage-analytics',
+  'board-attendance-check': 'minimum-attendance-check',
+  'eligibility-lists': 'eligibility-defaulter-lists',
+  'result-comparison': 'subject-teacher-comparison',
+  'practicals': 'practical-timetable-marks',
+  'lab-journals': 'lab-journals-attendance',
+  'board-practicals': 'board-practical-arrangements',
+  'admissions': 'admissions-review-merit',
+  'admissions-online': 'public-online-apply',
+  'equivalence': 'olevel-equivalence',
+  'merit-scholarship-tiers': 'merit-lists-matric',
+  'quotas': 'quota-admissions',
+  'enquiry-leads': 'enquiry-lead-tracking',
+  'bank-challans': 'bank-challans-3copy',
+  'defaulters-dues': 'fee-defaulters-ledger',
+  'fines': 'disciplinary-fines',
+  'fee-college-types': 'fee-installments-late-fees',
+  'fee-discounts': 'fee-discounts-scholarships',
+  'fee-refunds': 'fee-early-refunds',
+  'fee-board-alert': 'fee-alert-board-deadline',
+  'payroll': 'payroll-pay-slips',
+  'gate-scanner': 'campus-gate-qr-scanner',
+  'early-exit': 'digital-early-exit-pass',
+  'ptm': 'ptm-logs',
+  'feedback-box': 'anonymous-feedback-box',
+  'quizzes': 'online-quizzes-auto-marking',
+  'doc-templates': 'branded-pdf-templates',
+  'paid-receipt': 'verified-paid-voucher-qr',
+  'voucher-verify': 'public-voucher-verification',
+  'student-reports': 'student-report-pdf',
+  'payment-proof': 'payment-proof-upload',
+  'substitutions': 'teacher-substitutions',
+  'universal-timetable': 'universal-master-timetable',
+  'attendance-biometric': 'biometric-device-sync',
+  'faculty-attendance': 'staff-attendance-register',
+  'attendance-shortage': 'attendance-shortage-warnings',
+  'fees-online-payments': 'online-fee-payment',
+  'parent-portal': 'parent-portal-pwa',
+  'absence-alerts': 'absence-alerts-parents',
+  'principal-dashboard': 'principal-executive-dashboard',
+  'teacher-evaluation': 'teacher-evaluations',
+  'lab-stock': 'lab-apparatus-stock',
+  'mcq-bank': 'mdcat-mcq-bank',
+  'mock-tests': 'mock-test-series',
+  'omr-scan': 'omr-sheet-scanning',
+  'aggregate-calc': 'aggregate-calculator',
+  'entry-reg-tracking': 'entry-test-tracking',
+  'timetable-generator': 'auto-timetable-generator',
+  'ai-assessment-gen': 'ai-quiz-generator',
+  'ai-timetable-assist': 'ai-timetable-fixer',
+  'ai-pedagogy-gen': 'ai-pedagogy-generator',
+  'ai-board-mcq': 'board-syllabus-mcqs',
+  'ai-weak-topic': 'weak-topic-detection',
+  'ai-study-plan': 'study-plan-suggestions',
+  'ai-ocr-docs': 'document-ocr',
+  'ai-whatsapp-bot': 'whatsapp-admissions-chatbot',
+  'ai-urdu-translate': 'notice-translation',
+  'ai-at-risk': 'ai-at-risk-alerts',
+  'ai-payment-ocr': 'payment-screenshot-ocr',
+  // Previously unresolved route gate keys
+  'class-diary': 'student-diary-calendar',
+  'academic-calendar': 'student-diary-calendar',
+  'ai-knowledge-library': 'pdf-knowledge-library',
+  'ai-tutor-chat': 'student-tutor-chat',
+  'board-candidates': 'board-private-candidates',
+  // client-next/lib/featureMatrix.js UI keys
+  'custom-roles': 'custom-roles-permissions',
+  'api-access': 'public-api-webhooks',
+  'multi-campus': 'multi-campus-dashboard',
+  'ai-study-assistant': 'student-tutor-chat',
+  'ai-paper-generator': 'ai-quiz-generator',
+  'ai-quiz-generator': 'ai-quiz-generator',
+  'ai-assignment-generator': 'ai-pedagogy-generator',
+  'ai-notes-generator': 'ai-pedagogy-generator',
+  'ai-syllabus-generator': 'ai-pedagogy-generator',
+  'ai-mcq-generator': 'ai-quiz-generator',
+  'teachers': 'staff-accounts-leaves',
+  'subjects': 'sessions-classes-groups',
+  'classes': 'sessions-classes-groups',
+  'sections': 'sessions-classes-groups',
+  'sessions': 'sessions-classes-groups',
+  'exams': 'exams-roll-slips-results',
+  'results': 'exams-roll-slips-results',
+  'assignments': 'assignments-submissions',
+  'notices': 'announcements',
+  'analytics': 'report-center',
+  'reports': 'report-center',
+  'ai-assistant-readonly': 'ai-readonly-assistant'
 };
 
+// Stage 0.5 Re-Check: 88 complete services with verified end-to-end implementation (Route + Controller/Svc + Model + Reachable UI)
+const WORKING_IMPLEMENTATION_IDS = new Set([
+  '#1', '#2', '#3', '#4', '#5', '#6', '#7', '#9', '#10', '#11', '#12', '#13', '#14', '#15', '#16', '#17', '#18', '#19', '#20', '#21', '#22', '#23', '#24', '#25', '#27', '#30', '#31', '#32', '#33', '#34', '#35', '#36', '#37', '#38', '#39', '#40', '#41', '#42', '#43', '#44', '#45', '#46', '#47', '#48', '#49', '#50', '#51', '#52', '#53', '#55', '#56', '#57', '#58', '#59', '#60', '#61', '#62', '#63', '#64', '#65', '#66', '#67', '#68', '#69', '#70', '#71', '#72', '#73', '#74', '#75', '#77', '#78', '#88', '#89', '#90', '#91', '#92', '#93', '#94', '#95', '#96', '#97', '#99', '#100', '#101', '#102', '#103', 'N24'
+]);
+
+// Source of Truth: 86 services marked "Live" in Academix_Plans_and_Services_Split_-_Three_Plans.md
+const SOURCE_LIVE_IDS = new Set([
+  '#1', '#2', '#3', '#4', '#5', '#6', '#7', '#8', '#9', '#10', '#11', '#12', '#13', '#14', '#15', '#16', '#17', '#18', '#19', '#20', '#21', '#22', '#23', '#24', '#30', '#31', '#32', '#33', '#34', '#35', '#36', '#37', '#38', '#39', '#40', '#41', '#42', '#43', '#44', '#45', '#46', '#47', '#48', '#49', '#50', '#51', '#52', '#53', '#54', '#55', '#56', '#57', '#58', '#59', '#60', '#61', '#62', '#63', '#64', '#65', '#66', '#67', '#68', '#69', '#70', '#71', '#72', '#73', '#74', '#75', '#76', '#77', '#88', '#89', '#90', '#91', '#92', '#93', '#94', '#95', '#96', '#97', '#99', '#100', '#101', '#102'
+]);
+
+// Legacy capabilityCatalog.js lower placements preserved during Stages 1-2 when THREE_PLAN_MODE=false
+const LEGACY_CAP_PLANS = {
+  '#28': 'starter',
+  '#40': 'standard',
+  '#44': 'standard',
+  '#45': 'standard',
+  '#78': 'standard',
+  '#79': 'standard',
+  '#82': 'standard',
+  '#83': 'standard',
+  '#84': 'standard',
+  '#85': 'standard',
+  '#86': 'standard',
+  '#87': 'standard'
+};
+
+// New service N13 missing in legacy 161-item list, added in 3-plan mode (total = 162)
+const THREE_PLAN_N13 = {
+  id: 'N13',
+  key: 'white-label-branding',
+  name: 'White-label branding',
+  category: 'Governance & Infrastructure',
+  startsIn: null,
+  addonOnly: true,
+  status: 'coming_soon',
+  isCore: false,
+  dependsOn: ['college-branding-signatures'],
+  addonTiers: ['premium'],
+  addonType: 'PACK_GOVERNANCE',
+  addonAliases: [],
+  aliases: [],
+  description: 'Removes Academix branding across student/parent portals and replaces login pages and app icons with institution-branded surfaces.',
+  institutionBenefit: 'Delivers a fully white-labeled institutional identity without third-party SaaS branding.',
+  tierLevels: {
+    starter: 'Not available',
+    standard: 'Not available',
+    premium: 'Governance & Branding Pack (add-on)'
+  }
+};
+
+// 3-plan tier & add-on overrides for legacy 'enterprise' items and normalized module/pack codes
+const THREE_PLAN_OVERRIDES = {
+  '#98': { startsIn: 'premium', addonOnly: false, addonType: 'MODULE_CANTEEN', addonAliases: ['CANTEEN_POS'], addonTiers: ['standard'] },
+  '#102': { startsIn: 'premium' },
+  '#106': { startsIn: 'premium' },
+  '#108': { startsIn: 'premium' },
+  '#110': { startsIn: 'premium' },
+  'N05': { startsIn: 'premium' },
+  'N06': { startsIn: null, addonOnly: true, addonType: 'PACK_API', addonTiers: ['premium'] },
+  'N14': { startsIn: null, addonOnly: true, addonType: 'PACK_GOVERNANCE', addonTiers: ['premium'] },
+  'N15': { startsIn: null, addonOnly: true, addonType: 'PACK_GOVERNANCE', addonTiers: ['premium'] },
+  'N16': { startsIn: null, addonOnly: true, addonType: 'PACK_GOVERNANCE', addonTiers: ['premium'] },
+  'N19': { startsIn: 'premium' },
+  'N35': { startsIn: 'premium', addonOnly: false, addonType: 'MODULE_LIBRARY', addonAliases: ['LIBRARY_MODULE'], addonTiers: ['standard'] },
+  'N36': { startsIn: null, addonOnly: true, addonType: 'MODULE_TRANSPORT', addonAliases: ['TRANSPORT_MODULE'], addonTiers: ['standard', 'premium'] },
+  'N37': { startsIn: null, addonOnly: true, addonType: 'MODULE_HOSTEL', addonAliases: ['HOSTEL_MODULE'], addonTiers: ['standard', 'premium'] },
+  'N40': { startsIn: null, addonOnly: true, addonType: 'MODULE_ACCOUNTING', addonTiers: ['premium'] },
+  'N41': { startsIn: 'premium' },
+  'N42': { startsIn: null, addonOnly: true, addonType: 'MODULE_STAFF_HR', addonTiers: ['premium'] },
+  'N45': { startsIn: 'premium' },
+  'N48': { startsIn: 'premium' },
+  'N49': { startsIn: 'premium' },
+  'N50': { startsIn: 'premium' },
+  'N51': { startsIn: 'premium' }
+};
+
+// Build reverse map canonicalKey -> Set of aliases
+const ALIASES_BY_CANONICAL = new Map();
+for (const [aliasKey, canonKey] of Object.entries(FEATURE_ALIASES)) {
+  if (aliasKey === canonKey) continue;
+  if (!ALIASES_BY_CANONICAL.has(canonKey)) ALIASES_BY_CANONICAL.set(canonKey, new Set());
+  ALIASES_BY_CANONICAL.get(canonKey).add(aliasKey);
+}
+
+function buildRegistryView(threePlan) {
+  const list = [];
+  for (const raw of RAW_FEATURE_REGISTRY) {
+    const normalizedId = raw.id === '#32_N32' ? 'N32' : raw.id;
+    const id = threePlan ? normalizedId : raw.id;
+    const extraAliases = ALIASES_BY_CANONICAL.get(raw.key);
+    const mergedAliases = Array.from(new Set([...(raw.aliases || []), ...(extraAliases ? Array.from(extraAliases) : [])]));
+    const ov = threePlan ? (THREE_PLAN_OVERRIDES[normalizedId] || {}) : {};
+    const addonAliases = ov.addonAliases || (
+      raw.addonType === 'CANTEEN_POS' ? ['MODULE_CANTEEN']
+      : raw.addonType === 'LIBRARY_MODULE' ? ['MODULE_LIBRARY']
+      : raw.addonType === 'TRANSPORT_MODULE' ? ['MODULE_TRANSPORT']
+      : raw.addonType === 'HOSTEL_MODULE' ? ['MODULE_HOSTEL']
+      : []
+    );
+
+    const status = threePlan
+      ? (SOURCE_LIVE_IDS.has(normalizedId) ? 'live' : 'coming_soon')
+      : raw.status;
+
+    const item = {
+      ...raw,
+      ...ov,
+      id,
+      legacyId: raw.id,
+      legacyStartsIn: raw.startsIn,
+      legacyCapPlan: LEGACY_CAP_PLANS[normalizedId] || null,
+      addonOnly: threePlan ? Boolean(ov.addonOnly) : false,
+      addonAliases,
+      status,
+      hasWorkingImplementation: WORKING_IMPLEMENTATION_IDS.has(normalizedId),
+      sourceStatus: SOURCE_LIVE_IDS.has(normalizedId) ? 'live' : 'roadmap',
+      aliases: mergedAliases
+    };
+    list.push(item);
+
+    // Insert N13 directly after N12 in 3-plan view
+    if (threePlan && normalizedId === 'N12') {
+      const n13Aliases = ALIASES_BY_CANONICAL.get(THREE_PLAN_N13.key);
+      list.push({
+        ...THREE_PLAN_N13,
+        legacyId: null,
+        legacyStartsIn: null,
+        legacyCapPlan: null,
+        hasWorkingImplementation: false,
+        sourceStatus: 'roadmap',
+        aliases: Array.from(new Set([...(THREE_PLAN_N13.aliases || []), ...(n13Aliases ? Array.from(n13Aliases) : [])]))
+      });
+    }
+  }
+  return list;
+}
+
+const LEGACY_REGISTRY_LIST = buildRegistryView(false);
+const THREE_PLAN_REGISTRY_LIST = buildRegistryView(true);
+
+function getFeatureRegistry(threePlanOverride) {
+  const threePlan = threePlanOverride !== undefined ? Boolean(threePlanOverride) : isThreePlanMode();
+  return threePlan ? THREE_PLAN_REGISTRY_LIST : LEGACY_REGISTRY_LIST;
+}
+
+function resolveAlias(key, threePlanOverride) {
+  if (!key || typeof key !== 'string') return key;
+  const reg = getFeatureRegistry(threePlanOverride);
+  if (reg.some(f => f.key === key)) return key;
+  const mapped = FEATURE_ALIASES[key];
+  if (mapped && reg.some(f => f.key === mapped)) return mapped;
+  for (const f of reg) {
+    if (f.aliases && f.aliases.includes(key)) return f.key;
+  }
+  return key;
+}
+
+function buildPlanFeatures(threePlan) {
+  const reg = getFeatureRegistry(threePlan);
+  const plans = threePlan ? ['starter', 'basic', 'standard', 'premium', 'enterprise'] : ['starter', 'basic', 'standard', 'premium', 'enterprise'];
+  const levelMap = threePlan
+    ? { starter: 0, basic: 0, standard: 1, premium: 2, enterprise: 2 }
+    : { starter: 0, basic: 0, standard: 1, premium: 2, enterprise: 3 };
+  const out = {};
+  for (const plan of plans) {
+    const lvl = levelMap[plan] ?? 0;
+    const keys = [];
+    for (const feat of reg) {
+      if (feat.addonOnly || feat.startsIn == null) continue;
+      const featLvl = levelMap[feat.startsIn] ?? 0;
+      if (lvl >= featLvl) {
+        keys.push(feat.key);
+        if (feat.aliases) keys.push(...feat.aliases);
+      }
+    }
+    out[plan] = Array.from(new Set(keys));
+  }
+  return out;
+}
+
+const LEGACY_PLAN_FEATURES = buildPlanFeatures(false);
+const THREE_PLAN_FEATURES = buildPlanFeatures(true);
+
+function getPlanFeatures(threePlanOverride) {
+  const threePlan = threePlanOverride !== undefined ? Boolean(threePlanOverride) : isThreePlanMode();
+  return threePlan ? THREE_PLAN_FEATURES : LEGACY_PLAN_FEATURES;
+}
+
+function makeDynamicArrayProxy(selectArr) {
+  return new Proxy([], {
+    get(_t, prop) {
+      const target = selectArr();
+      const val = Reflect.get(target, prop);
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+    has(_t, prop) {
+      return Reflect.has(selectArr(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(selectArr());
+    },
+    getOwnPropertyDescriptor(_t, prop) {
+      return Reflect.getOwnPropertyDescriptor(selectArr(), prop);
+    }
+  });
+}
+
+function makeDynamicObjectProxy(selectObj) {
+  return new Proxy({}, {
+    get(_t, prop) {
+      const target = selectObj();
+      const val = Reflect.get(target, prop);
+      return typeof val === 'function' ? val.bind(target) : val;
+    },
+    has(_t, prop) {
+      return Reflect.has(selectObj(), prop);
+    },
+    ownKeys() {
+      return Reflect.ownKeys(selectObj());
+    },
+    getOwnPropertyDescriptor(_t, prop) {
+      return Reflect.getOwnPropertyDescriptor(selectObj(), prop);
+    }
+  });
+}
+
 /**
- * Validates the full 162-service DAG for uniqueness, categories, valid tiers,
+ * Validates the active service DAG for uniqueness, categories, valid tiers,
  * proper tier hierarchy ordering, and zero cyclic dependencies.
  */
-function validateRegistryDAG() {
+function validateRegistryDAG(threePlanOverride) {
+  const threePlan = threePlanOverride !== undefined ? Boolean(threePlanOverride) : isThreePlanMode();
+  const registry = getFeatureRegistry(threePlan);
+  const levelMap = threePlan
+    ? { starter: 0, basic: 0, standard: 1, premium: 2, enterprise: 2 }
+    : PLAN_LEVEL;
+
   const keys = new Set();
   const ids = new Set();
-  const byTier = { starter: 0, standard: 0, premium: 0, enterprise: 0 };
+  const byTier = threePlan
+    ? { starter: 0, standard: 0, premium: 0, addonOnly: 0 }
+    : { starter: 0, standard: 0, premium: 0, enterprise: 0 };
   const byStatus = { live: 0, coming_soon: 0 };
 
-  for (const s of FEATURE_REGISTRY) {
+  for (const s of registry) {
     if (keys.has(s.key)) throw new Error(`Duplicate service key: ${s.key}`);
     keys.add(s.key);
 
@@ -2655,26 +3011,31 @@ function validateRegistryDAG() {
     ids.add(s.id);
 
     if (!CATEGORIES.includes(s.category)) throw new Error(`Invalid category for ${s.key}: ${s.category}`);
-    if (!['starter', 'standard', 'premium', 'enterprise'].includes(s.startsIn)) {
-      throw new Error(`Invalid startsIn tier for ${s.key}: ${s.startsIn}`);
+    if (threePlan && s.addonOnly) {
+      if (s.startsIn !== null) throw new Error(`Addon-only service ${s.key} must have startsIn=null`);
+      byTier.addonOnly++;
+    } else {
+      const validTiers = threePlan ? ['starter', 'standard', 'premium'] : ['starter', 'standard', 'premium', 'enterprise'];
+      if (!validTiers.includes(s.startsIn)) {
+        throw new Error(`Invalid startsIn tier for ${s.key}: ${s.startsIn}`);
+      }
+      byTier[s.startsIn]++;
     }
+
     if (!['live', 'coming_soon'].includes(s.status)) {
       throw new Error(`Invalid status for ${s.key}: ${s.status}`);
     }
-
-    byTier[s.startsIn]++;
     byStatus[s.status]++;
   }
 
-  // Tier ordering & valid dependency check
-  for (const s of FEATURE_REGISTRY) {
+  for (const s of registry) {
     for (const depKey of s.dependsOn) {
-      const dep = FEATURE_REGISTRY.find(x => x.key === depKey);
+      const dep = registry.find(x => x.key === depKey);
       if (!dep) {
         throw new Error(`Service ${s.key} depends on non-existent ${depKey}`);
       }
-      const sLvl = PLAN_LEVEL[s.startsIn];
-      const depLvl = PLAN_LEVEL[dep.startsIn];
+      const sLvl = s.addonOnly ? levelMap.premium : levelMap[s.startsIn];
+      const depLvl = dep.addonOnly ? levelMap.premium : levelMap[dep.startsIn];
       if (depLvl > sLvl) {
         const allowsAddon = dep.addonTiers && dep.addonTiers.includes(s.startsIn);
         if (!allowsAddon) {
@@ -2684,32 +3045,27 @@ function validateRegistryDAG() {
     }
   }
 
-  // Cycle check using DFS
   const visited = new Map();
   function dfs(key) {
     visited.set(key, 1);
-    const s = FEATURE_REGISTRY.find(x => x.key === key);
+    const s = registry.find(x => x.key === key);
     if (s && s.dependsOn) {
       for (const dep of s.dependsOn) {
         if (visited.get(dep) === 1) {
           throw new Error(`Dependency cycle detected involving ${key} -> ${dep}`);
         }
-        if (!visited.get(dep)) {
-          dfs(dep);
-        }
+        if (!visited.get(dep)) dfs(dep);
       }
     }
     visited.set(key, 2);
   }
 
-  for (const s of FEATURE_REGISTRY) {
-    if (!visited.get(s.key)) {
-      dfs(s.key);
-    }
+  for (const s of registry) {
+    if (!visited.get(s.key)) dfs(s.key);
   }
 
   return {
-    total: FEATURE_REGISTRY.length,
+    total: registry.length,
     byTier,
     byStatus,
     valid: true
@@ -2718,32 +3074,35 @@ function validateRegistryDAG() {
 
 /**
  * Resolves effective active features for a given college subscription,
- * taking into account:
- * 1. Base tier inclusion (nested: starter -> standard -> premium -> enterprise)
- * 2. Active, unexpired add-on modules (e.g. CANTEEN_POS, LIBRARY_MODULE)
- * 3. Administrative overrides (FORCE_ON / FORCE_OFF)
- * 4. Deterministic fixed-point dependency propagation (disabling deps blocks dependents)
- *
- * @param {string} rawPlanId - Plan ID ('starter', 'standard', 'premium', 'enterprise')
- * @param {object} rawOverrides - Stored overrides (e.g. { 'canteen-pos': 'FORCE_ON' } or boolean)
- * @param {string[]} activeAddons - Array of active addonType strings (e.g. ['CANTEEN_POS', 'LIBRARY_MODULE'])
- * @returns {object} - { planId, effectiveKeys, featureMatrix, stats }
+ * supporting both legacy 4-plan and 3-plan modes behind THREE_PLAN_MODE.
  */
-function resolveCollegeFeatures(rawPlanId, rawOverrides = {}, activeAddons = []) {
-  const planId = normalizePlanId(rawPlanId);
-  const planLvl = PLAN_LEVEL[planId] ?? 0;
+function resolveCollegeFeatures(rawPlanId, rawOverrides = {}, activeAddons = [], options = {}) {
+  const threePlan = options.threePlan !== undefined ? Boolean(options.threePlan) : isThreePlanMode();
+  const registry = getFeatureRegistry(threePlan);
+  const planId = normalizePlanId(rawPlanId, threePlan);
+  const levelMap = threePlan
+    ? { starter: 0, basic: 0, standard: 1, premium: 2, enterprise: 2 }
+    : PLAN_LEVEL;
+  const planLvl = levelMap[planId] ?? 0;
   const overrides = (typeof rawOverrides === 'object' && rawOverrides !== null) ? rawOverrides : {};
   const addonsSet = new Set(Array.isArray(activeAddons) ? activeAddons : []);
 
   const stateMap = new Map();
 
-  for (const feat of FEATURE_REGISTRY) {
-    const featLvl = PLAN_LEVEL[feat.startsIn] ?? 0;
-    const inPlanBase = planLvl >= featLvl;
-    const hasAddon = feat.addonType && addonsSet.has(feat.addonType);
+  for (const feat of registry) {
+    let inPlanBase = false;
+    if (!feat.addonOnly && feat.startsIn != null) {
+      const effectiveStartsIn = (!threePlan && options.catalogCompat && feat.legacyCapPlan)
+        ? feat.legacyCapPlan
+        : feat.startsIn;
+      const featLvl = levelMap[effectiveStartsIn] ?? 0;
+      inPlanBase = planLvl >= featLvl;
+    }
+
+    const addonCodes = [feat.addonType, ...(feat.addonAliases || [])].filter(Boolean);
+    const hasAddon = addonCodes.some(code => addonsSet.has(code));
     const inPlan = inPlanBase || hasAddon;
 
-    // Read override (support string 'FORCE_ON' / 'FORCE_OFF' or boolean)
     let overrideVal = overrides[feat.key];
     if (overrideVal === undefined && feat.aliases) {
       for (const alias of feat.aliases) {
@@ -2761,7 +3120,6 @@ function resolveCollegeFeatures(rawPlanId, rawOverrides = {}, activeAddons = [])
       override = false;
     }
 
-    // Foundation core features are unconditionally active
     if (feat.isCore) {
       stateMap.set(feat.key, {
         ...feat,
@@ -2803,13 +3161,13 @@ function resolveCollegeFeatures(rawPlanId, rawOverrides = {}, activeAddons = [])
   // Fixed-point dependency propagation
   let changed = true;
   let iterations = 0;
-  const maxIterations = FEATURE_REGISTRY.length * 2;
+  const maxIterations = registry.length * 2;
 
   while (changed && iterations < maxIterations) {
     changed = false;
     iterations++;
 
-    for (const feat of FEATURE_REGISTRY) {
+    for (const feat of registry) {
       const current = stateMap.get(feat.key);
       if (!current || current.isCore) continue;
 
@@ -2836,7 +3194,6 @@ function resolveCollegeFeatures(rawPlanId, rawOverrides = {}, activeAddons = [])
   const featureMatrix = Array.from(stateMap.values());
   const effectiveKeysSet = new Set(featureMatrix.filter(f => f.effective).map(f => f.key));
 
-  // Add backward-compatible alias keys into effectiveKeys list
   for (const feat of featureMatrix) {
     if (feat.effective && feat.aliases) {
       for (const alias of feat.aliases) {
@@ -2864,27 +3221,16 @@ function resolveCollegeFeatures(rawPlanId, rawOverrides = {}, activeAddons = [])
   };
 }
 
-// Pre-compute PLAN_FEATURES for fast lookup and legacy compatibility
-const PLAN_FEATURES = {};
-for (const plan of ['starter', 'basic', 'standard', 'premium', 'enterprise']) {
-  const norm = normalizePlanId(plan);
-  const lvl = PLAN_LEVEL[norm] ?? 0;
-  const keys = [];
-  for (const feat of FEATURE_REGISTRY) {
-    const featLvl = PLAN_LEVEL[feat.startsIn] ?? 0;
-    if (lvl >= featLvl) {
-      keys.push(feat.key);
-      if (feat.aliases) keys.push(...feat.aliases);
-    }
-  }
-  PLAN_FEATURES[plan] = Array.from(new Set(keys));
-}
-
 module.exports = {
   CATEGORIES,
-  FEATURE_REGISTRY,
+  FEATURE_REGISTRY: makeDynamicArrayProxy(() => getFeatureRegistry()),
   FEATURE_ALIASES,
-  PLAN_FEATURES,
+  PLAN_FEATURES: makeDynamicObjectProxy(() => getPlanFeatures()),
+  WORKING_IMPLEMENTATION_IDS,
+  SOURCE_LIVE_IDS,
+  getFeatureRegistry,
+  getPlanFeatures,
+  resolveAlias,
   validateRegistryDAG,
   resolveCollegeFeatures,
   normalizePlanId
