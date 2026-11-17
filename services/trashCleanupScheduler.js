@@ -13,17 +13,64 @@
 
 const { getSystemClient, pools } = require('../config/prismaManager');
 const { ACTIONS, CATEGORIES, STATUSES } = require('../config/activityConstants');
+const { getEntitlements } = require('./entitlements');
 
-const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+const DEFAULT_TRASH_RETENTION_DAYS = 30; // Unconditional safety floor: Starter/Standard 30d, Premium 90d
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 const ADVISORY_LOCK_ID = 8847291; // Unique stable lock ID for Academix trash cleanup
 
 // SOFT_DELETE_ALLOWED models in canonical Prisma format
 const SOFT_DELETE_ALLOWED_MODELS = [
-  { modelKey: 'announcement',  label: 'Announcement'  },
-  { modelKey: 'assignment',    label: 'Assignment'    },
-  { modelKey: 'pDFDocument',   label: 'PDFDocument'   },
-  { modelKey: 'quiz',          label: 'Quiz'          },
+  { modelKey: 'announcement',  label: 'Announcement',  collegeField: 'college_id' },
+  { modelKey: 'assignment',    label: 'Assignment',    collegeField: 'college_id' },
+  { modelKey: 'pDFDocument',   label: 'PDFDocument',   collegeField: 'collegeId'  },
+  { modelKey: 'quiz',          label: 'Quiz',          collegeField: 'college_id' },
 ];
+
+/**
+ * Resolves per-college trash retention cutoff and active LegalHold lock (cached per run).
+ */
+async function resolveCollegeRetentionPolicy(prisma, collegeId, now, cache = new Map()) {
+  if (!collegeId) {
+    return {
+      retentionDays: DEFAULT_TRASH_RETENTION_DAYS,
+      cutoffDate: new Date(now.getTime() - DEFAULT_TRASH_RETENTION_DAYS * MS_PER_DAY),
+      hasLegalHold: false,
+    };
+  }
+  if (cache.has(collegeId)) return cache.get(collegeId);
+
+  let retentionDays = DEFAULT_TRASH_RETENTION_DAYS;
+  let hasLegalHold = false;
+
+  try {
+    const activeHold = await prisma.legalHold.findFirst({
+      where: { college_id: collegeId, isActive: true },
+      select: { id: true }
+    });
+    hasLegalHold = Boolean(activeHold);
+  } catch {
+    hasLegalHold = false;
+  }
+
+  try {
+    const ent = await getEntitlements(collegeId, prisma);
+    const configuredDays = Number(ent?.effectiveLimits?.trashRetentionDays);
+    if (Number.isFinite(configuredDays) && configuredDays > 0) {
+      retentionDays = configuredDays;
+    }
+  } catch {
+    retentionDays = DEFAULT_TRASH_RETENTION_DAYS;
+  }
+
+  const policy = {
+    retentionDays,
+    cutoffDate: new Date(now.getTime() - retentionDays * MS_PER_DAY),
+    hasLegalHold,
+  };
+  cache.set(collegeId, policy);
+  return policy;
+}
 
 /**
  * Resource-specific permanent purge functions.
@@ -97,16 +144,18 @@ async function processExpiredTrashCleanup() {
       return;
     }
 
-    const cutoffDate = new Date(startTime.getTime() - SEVEN_DAYS_MS);
+    // Minimum possible retention cutoff across plans (30 days) for coarse initial query
+    const minCutoffDate = new Date(startTime.getTime() - DEFAULT_TRASH_RETENTION_DAYS * MS_PER_DAY);
+    const policyCache = new Map();
     let totalPurged = 0;
     let totalErrors = 0;
 
-    for (const { modelKey, label } of SOFT_DELETE_ALLOWED_MODELS) {
+    for (const { modelKey, label, collegeField } of SOFT_DELETE_ALLOWED_MODELS) {
       let items;
       try {
         items = await prisma[modelKey].findMany({
-          where: { deletedAt: { lte: cutoffDate } },
-          select: { id: true, deletedAt: true }
+          where: { deletedAt: { not: null, lte: minCutoffDate } },
+          select: { id: true, deletedAt: true, [collegeField]: true }
         });
       } catch (e) {
         console.error(`[Trash Cleanup] Failed to query ${label}:`, e.message);
@@ -116,6 +165,15 @@ async function processExpiredTrashCleanup() {
 
       for (const item of items) {
         try {
+          const itemCollegeId = item[collegeField] || null;
+          const policy = await resolveCollegeRetentionPolicy(prisma, itemCollegeId, startTime, policyCache);
+          if (policy.hasLegalHold) {
+            continue;
+          }
+          if (!item.deletedAt || item.deletedAt > policy.cutoffDate) {
+            continue;
+          }
+
           // Atomic transaction per item prevents restore-vs-cleanup race:
           // Re-read deletedAt inside transaction before purging.
           await prisma.$transaction(async (tx) => {
@@ -129,7 +187,7 @@ async function processExpiredTrashCleanup() {
               console.log(`[Trash Cleanup] ${label} ${item.id} was restored before purge. Skipping.`);
               return;
             }
-            if (fresh.deletedAt > cutoffDate) {
+            if (fresh.deletedAt > policy.cutoffDate) {
               console.log(`[Trash Cleanup] ${label} ${item.id} no longer expired. Skipping.`);
               return;
             }
@@ -202,4 +260,6 @@ function initTrashCleanupScheduler() {
 module.exports = {
   processExpiredTrashCleanup,
   initTrashCleanupScheduler,
+  resolveCollegeRetentionPolicy,
+  DEFAULT_TRASH_RETENTION_DAYS,
 };

@@ -48,11 +48,13 @@ async function reserveUploadSlot(collegeId, userId, opts) {
   }
 
   // 1. Fetch entitlements for storage caps
-  const ent = await getEntitlements(collegeId);
-  const maxStorage = ent.effectiveLimits?.maxStorageBytes ?? (5n * 1024n * 1024n * 1024n); // 5GB default
-  const maxUpload = ent.effectiveLimits?.maxUploadBytes ?? (50n * 1024n * 1024n); // 50MB default
+  const ent = await getEntitlements(collegeId, prisma);
+  const rawMaxStorage = ent.effectiveLimits?.maxStorageBytes ?? (5n * 1024n * 1024n * 1024n); // 5GB default
+  const rawMaxUpload = ent.effectiveLimits?.maxUploadBytes ?? (50n * 1024n * 1024n); // 50MB default
+  const maxStorage = BigInt(rawMaxStorage);
+  const maxUpload = BigInt(rawMaxUpload);
 
-  if (maxUpload !== -1n && declaredBytes > BigInt(maxUpload)) {
+  if (maxUpload !== -1n && declaredBytes > maxUpload) {
     throw Object.assign(
       new Error(`File size (${declaredBytes} bytes) exceeds maximum upload limit (${maxUpload} bytes)`),
       { status: 413, code: 'MAX_UPLOAD_SIZE_EXCEEDED' }

@@ -421,12 +421,119 @@ async function queueExportJob({ collegeId, campusId = null, userId, exportType, 
   return job;
 }
 
+const OFFBOARDING_EXPORT_WINDOW_DAYS = 30; // Proposed by the plan: 30d post-cancel/expiry data copy
+
+function isWithinOffboardingWindow(college, now = new Date()) {
+  if (!college) return { allowed: false, reason: 'COLLEGE_NOT_FOUND' };
+  const subStatus = String(college.subStatus || '').toUpperCase();
+  if (college.isActive !== false && subStatus === 'ACTIVE') {
+    return { allowed: true, reason: 'ACTIVE_SUBSCRIPTION', daysRemaining: null };
+  }
+  const anchor = college.periodEnd || college.grace_until || college.trialEndsAt || college.updatedAt;
+  if (!anchor) {
+    // Active trial or never-set periodEnd: allow if active or recently updated
+    return { allowed: subStatus === 'TRIAL', reason: subStatus === 'TRIAL' ? 'TRIAL' : 'NO_EXPIRY_ANCHOR', daysRemaining: 30 };
+  }
+  const expiresAtMs = new Date(anchor).getTime() + OFFBOARDING_EXPORT_WINDOW_DAYS * 86400000;
+  const remainingMs = expiresAtMs - now.getTime();
+  if (remainingMs >= 0) {
+    return {
+      allowed: true,
+      reason: 'OFFBOARDING_GRACE_WINDOW',
+      daysRemaining: Math.ceil(remainingMs / 86400000),
+      expiresAt: new Date(expiresAtMs)
+    };
+  }
+  return {
+    allowed: false,
+    reason: 'OFFBOARDING_WINDOW_EXPIRED',
+    daysRemaining: 0,
+    expiredAt: new Date(expiresAtMs)
+  };
+}
+
+/**
+ * Unconditional Safety Export (#T2.3): Allows Admins/Principals of cancelled or
+ * expired colleges to download their full institution archive (CSV strings) for 30 days.
+ */
+async function generateOffboardingArchive({ collegeId, campusId = null, userId = null, dbClient = null, now = new Date() }) {
+  const prisma = dbClient || getPrisma();
+  const college = await prisma.college.findUnique({
+    where: { id: collegeId },
+    select: {
+      id: true,
+      name: true,
+      isActive: true,
+      subStatus: true,
+      periodEnd: true,
+      grace_until: true,
+      trialEndsAt: true,
+      updatedAt: true
+    }
+  });
+
+  const windowStatus = isWithinOffboardingWindow(college, now);
+  if (!windowStatus.allowed) {
+    throw Object.assign(
+      new Error('The 30-day post-cancellation offboarding export window has expired.'),
+      { status: 403, code: 'OFFBOARDING_WINDOW_EXPIRED', details: windowStatus }
+    );
+  }
+
+  const [studentsData, attendanceData, feesData] = await Promise.all([
+    fetchExportData(prisma, collegeId, campusId, 'STUDENTS'),
+    fetchExportData(prisma, collegeId, campusId, 'ATTENDANCE'),
+    fetchExportData(prisma, collegeId, campusId, 'FEES')
+  ]);
+
+  const files = {
+    'students.csv': generateCsv(studentsData.headers, studentsData.rows),
+    'attendance.csv': generateCsv(attendanceData.headers, attendanceData.rows),
+    'fees.csv': generateCsv(feesData.headers, feesData.rows)
+  };
+
+  if (prisma.auditLog?.create && userId) {
+    await prisma.auditLog.create({
+      data: {
+        college_id: collegeId,
+        user_id: userId,
+        action: 'OFFBOARDING_ARCHIVE_EXPORTED',
+        details: JSON.stringify({
+          windowReason: windowStatus.reason,
+          daysRemaining: windowStatus.daysRemaining,
+          counts: {
+            students: studentsData.rows.length,
+            attendance: attendanceData.rows.length,
+            fees: feesData.rows.length
+          }
+        })
+      }
+    }).catch(() => {});
+  }
+
+  return {
+    collegeId,
+    collegeName: college.name,
+    exportedAt: now.toISOString(),
+    windowStatus,
+    counts: {
+      students: studentsData.rows.length,
+      attendance: attendanceData.rows.length,
+      fees: feesData.rows.length
+    },
+    files
+  };
+}
+
 module.exports = {
   EXPORT_TYPE_GATES,
+  OFFBOARDING_EXPORT_WINDOW_DAYS,
   sanitizeCsvCell,
   generateCsv,
   generateXlsx,
   generatePdf,
   fetchExportData,
-  queueExportJob
+  queueExportJob,
+  isWithinOffboardingWindow,
+  generateOffboardingArchive
 };

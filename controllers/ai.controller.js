@@ -264,10 +264,17 @@ exports.scanAgentDrafts = async (req, res) => {
   try {
     const result = await scanAndGenerateActionDrafts({
       collegeId: req.collegeId,
-      campusId: req.campusId || null,
+      campusId: req.user?.campus_id || req.campusId || null,
+      requestedById: req.user?.id || req.user?._id || null,
+      requestedByRole: req.user?.role || 'admin',
+      requestedByCampusId: req.user?.campus_id || null,
+      prompt: req.body?.prompt || '',
     });
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
+    if (err.status === 403 || err.status === 422) {
+      return res.status(err.status).json({ error: err.code || 'AGENT_GUARDRAIL_BLOCKED', message: err.message });
+    }
     if (err instanceof InsufficientAICreditsError || err.code === 'INSUFFICIENT_AI_CREDITS') {
       return res.status(422).json({ error: 'INSUFFICIENT_AI_CREDITS', message: err.message });
     }
@@ -294,10 +301,15 @@ exports.executeAgentAction = async (req, res) => {
       actionId: id,
       collegeId: req.collegeId,
       adminUserId,
+      adminRole: req.user?.role || 'admin',
+      adminCampusId: req.user?.campus_id || null,
     });
 
     return res.status(200).json({ success: true, ...result });
   } catch (err) {
+    if (err.status === 403 || err.status === 422) {
+      return res.status(err.status).json({ error: err.code || 'AGENT_GUARDRAIL_BLOCKED', message: err.message });
+    }
     return res.status(400).json({ error: 'EXECUTION_ERROR', message: err.message });
   }
 };

@@ -56,6 +56,11 @@ function resolveLimit(effectiveLimits, metric) {
   if (metric === 'exportMaxRows') return effectiveLimits.exportMaxRows ?? effectiveLimits.exportsMonthly?.maxCsvRows ?? 1000;
   if (metric === 'apiCalls') return effectiveLimits.apiCallsMonthly;
   if (metric === 'backupZip') return effectiveLimits.backupZipMonthly;
+  if (metric === 'emailsSent' || metric === 'emailsMonthly') return effectiveLimits.emailsMonthly ?? 3000;
+  if (metric === 'scheduledReports' || metric === 'scheduledReportsMonthly') return effectiveLimits.scheduledReportsMonthly ?? 0;
+  if (metric === 'omrSheets' || metric === 'omrSheetsMonthly') return effectiveLimits.omrSheetsMonthly ?? 0;
+  if (metric === 'customReportTemplates') return effectiveLimits.customReportTemplatesMax ?? 0;
+  if (metric === 'bulkImportMaxRows') return effectiveLimits.bulkImportMaxRows ?? 1000;
   if (metric.startsWith('tutorChat:')) return effectiveLimits.tutorDailyPerStudent;
 
   return 0;

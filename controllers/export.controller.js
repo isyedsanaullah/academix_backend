@@ -6,7 +6,7 @@
  */
 
 const { getSystemClient } = require('../config/prismaManager');
-const { queueExportJob } = require('../services/exportService');
+const { queueExportJob, generateOffboardingArchive } = require('../services/exportService');
 
 function getPrisma() {
   return getSystemClient();
@@ -137,9 +137,41 @@ async function listBoardExportProfiles(req, res) {
   }
 }
 
+/**
+ * GET /api/exports/offboarding
+ * Unconditional 30-day post-cancellation Admin data copy export
+ */
+async function exportOffboardingBundle(req, res) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id;
+    const campusId = req.campusId || null;
+    const userId = req.user?.id || req.user?._id;
+    if (!collegeId) {
+      return res.status(400).json({ success: false, message: 'College ID is required' });
+    }
+    if (!['admin', 'principal', 'superAdmin'].includes(req.user?.role)) {
+      return res.status(403).json({ success: false, message: 'Only institution administrators can download offboarding archives' });
+    }
+
+    const archive = await generateOffboardingArchive({ collegeId, campusId, userId });
+    return res.json({ success: true, archive });
+  } catch (err) {
+    if (err.status) {
+      return res.status(err.status).json({
+        success: false,
+        code: err.code || 'OFFBOARDING_EXPORT_ERROR',
+        message: err.message,
+        details: err.details
+      });
+    }
+    return res.status(500).json({ success: false, message: 'Failed to export offboarding archive', error: err.message });
+  }
+}
+
 module.exports = {
   requestExport,
   listExports,
   getExportDetails,
-  listBoardExportProfiles
+  listBoardExportProfiles,
+  exportOffboardingBundle
 };

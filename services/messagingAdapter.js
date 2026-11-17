@@ -1,5 +1,31 @@
 const { getSystemClient } = require('../config/prismaManager');
 
+const SMS_GSM_SEGMENT_LEN = 160;
+const SMS_UNICODE_SEGMENT_LEN = 70; // Urdu / Arabic / non-ASCII UCS-2 SMS segment length
+
+function isUnicodeSms(body = '') {
+  return /[^\x00-\x7F]/.test(String(body));
+}
+
+/**
+ * Segment & channel credit formula:
+ * - IN_APP:   0 credits
+ * - WHATSAPP: 2 credits per message
+ * - SMS:      1 credit per segment (160 GSM chars or 70 Urdu Unicode chars)
+ */
+function calculateMessageCredits(channel = 'IN_APP', body = '') {
+  const ch = String(channel || 'IN_APP').toUpperCase();
+  if (ch === 'IN_APP') return 0;
+  if (ch === 'WHATSAPP') return 2;
+  if (ch === 'SMS') {
+    const len = String(body || '').length;
+    if (len === 0) return 1;
+    const segmentSize = isUnicodeSms(body) ? SMS_UNICODE_SEGMENT_LEN : SMS_GSM_SEGMENT_LEN;
+    return Math.max(1, Math.ceil(len / segmentSize));
+  }
+  return 0;
+}
+
 class MessagingDriver {
   constructor() {
     this.isReal = false;
@@ -117,5 +143,7 @@ module.exports = {
   TwilioSmsDriver,
   MetaWhatsAppDriver,
   sendMessage,
-  activeDrivers
+  activeDrivers,
+  isUnicodeSms,
+  calculateMessageCredits
 };

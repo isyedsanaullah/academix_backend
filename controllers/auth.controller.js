@@ -5,6 +5,7 @@ const { getSystemClient } = require('../config/prismaManager');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
+const { isThreePlanMode } = require('../config/featureFlags');
 const { getEntitlements } = require('../middleware/loadEntitlements');
 const mailService = require('../services/mailService');
 const crypto = require('crypto');
@@ -20,6 +21,39 @@ const {
 
 // In-memory rate limiting for step-up auth (5 failures -> 15 min lockout)
 const stepUpAttempts = new Map();
+
+function evaluateAdminTwoFactorEnrollment(college, user) {
+  if (!college || !['admin', 'principal'].includes(user?.role) || user?.totpEnabled) {
+    return null;
+  }
+  const collegeSettings = (college.settings && typeof college.settings === 'object') ? college.settings : {};
+  const mandatoryThreePlan = isThreePlanMode() && process.env.DISABLE_MANDATORY_ADMIN_2FA !== 'true';
+  const explicitlyEnabled = Boolean(collegeSettings.require2FAForAdmins);
+  if (!mandatoryThreePlan && !explicitlyEnabled) {
+    return null;
+  }
+
+  const graceDays = Number(collegeSettings['twofa.enforcementGraceDays']) || 7;
+  const colCreatedAt = college.createdAt ? new Date(college.createdAt).getTime() : 0;
+  if (Date.now() - colCreatedAt <= graceDays * 86400000) {
+    return null;
+  }
+
+  const enrollToken = jwt.sign(
+    { userId: user.id, collegeId: user.college_id, role: user.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
+    process.env.JWT_SECRET,
+    { expiresIn: '15m' }
+  );
+
+  return {
+    success: true,
+    requires2FAEnrollment: true,
+    enrollToken,
+    graceDays,
+    message: 'Two-factor authentication is enforced for administrators in this institution. Please complete setup.'
+  };
+}
+exports.evaluateAdminTwoFactorEnrollment = evaluateAdminTwoFactorEnrollment;
 
 // @desc    Register a new user
 
@@ -192,8 +226,8 @@ exports.login = async (req, res, next) => {
         where: { id: user.college_id },
         select: {
           id: true, name: true, code: true, slug: true, status: true, logo: true,
-          subscription: true, onboarding_state: true, subscription_status: true, grace_until: true,
-          subStatus: true, tokenEpoch: true
+          subscription: true, settings: true, createdAt: true, onboarding_state: true,
+          subscription_status: true, grace_until: true, subStatus: true, tokenEpoch: true
         }
       });
       if (college) {
@@ -264,27 +298,10 @@ exports.login = async (req, res, next) => {
       }
     }
 
-    // Phase 9A: Enforced 2FA for College Admins after grace period
-    if (college && ['admin', 'principal'].includes(user.role) && !user.totpEnabled) {
-      const collegeSettings = (college.settings && typeof college.settings === 'object') ? college.settings : {};
-      if (collegeSettings.require2FAForAdmins) {
-        const graceDays = Number(collegeSettings['twofa.enforcementGraceDays']) || 7;
-        const colCreatedAt = college.createdAt ? new Date(college.createdAt).getTime() : 0;
-        if (Date.now() - colCreatedAt > graceDays * 86400000) {
-          const enrollToken = jwt.sign(
-            { userId: user.id, collegeId: user.college_id, role: user.role, scope: 'ENROLL_2FA', jti: crypto.randomUUID() },
-            process.env.JWT_SECRET,
-            { expiresIn: '15m' }
-          );
-
-          return res.json({
-            success: true,
-            requires2FAEnrollment: true,
-            enrollToken,
-            message: 'Two-factor authentication is enforced for administrators in this institution. Please complete setup.'
-          });
-        }
-      }
+    // Phase 9A / T2.3: Enforced 2FA for College Admins/Principals after 7-day grace period
+    const enrollPayload = evaluateAdminTwoFactorEnrollment(college, user);
+    if (enrollPayload) {
+      return res.json(enrollPayload);
     }
 
     // Clear failed password markers and process Known Device tracking & alert
@@ -377,7 +394,8 @@ exports.googleLogin = async (req, res, next) => {
         where: { id: updatedUser.college_id },
         select: {
           id: true, name: true, code: true, slug: true, status: true, logo: true,
-          subscription: true, onboarding_state: true, subscription_status: true, grace_until: true
+          subscription: true, settings: true, createdAt: true, onboarding_state: true,
+          subscription_status: true, grace_until: true, subStatus: true, tokenEpoch: true
         }
       });
       if (college) {
@@ -429,10 +447,16 @@ exports.googleLogin = async (req, res, next) => {
       });
     }
 
+    // T2.3: Enforced Admin/Principal 2FA enrollment on Google OAuth sign-in as well
+    const googleEnrollPayload = evaluateAdminTwoFactorEnrollment(college, updatedUser);
+    if (googleEnrollPayload) {
+      return res.json(googleEnrollPayload);
+    }
+
     // Process Known Device tracking & alert
     await processKnownDevice(req, res, updatedUser);
 
-    const token = generateToken(updatedUser.id, updatedUser.college_id || null, updatedUser.role);
+    const token = generateToken(updatedUser.id, updatedUser.college_id || null, updatedUser.role, college ? (college.tokenEpoch || 0) : 0);
 
     res.json({
       success: true,

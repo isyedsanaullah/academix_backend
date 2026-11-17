@@ -8,16 +8,22 @@
 const express = require('express');
 const router = express.Router();
 const protect = require('../middleware/auth');
+const authorize = require('../middleware/rbac');
 const { subscriptionGate } = require('../middleware/subscriptionGate');
 const {
   requestExport,
   listExports,
   getExportDetails,
-  listBoardExportProfiles
+  listBoardExportProfiles,
+  exportOffboardingBundle
 } = require('../controllers/export.controller');
 
-// Gated by export-center (#N01)
 router.use(protect);
+
+// T2.3 Unconditional safety rule: 30-day post-cancellation Admin offboarding archive (never plan-gated)
+router.get('/offboarding', authorize('admin', 'principal', 'superAdmin'), exportOffboardingBundle);
+
+// Gated by export-center (#N01)
 router.use(subscriptionGate('export-center'));
 
 router.get('/board-profiles', listBoardExportProfiles);

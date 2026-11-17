@@ -11,6 +11,7 @@
 const { getSystemClient } = require('../config/prismaManager');
 const { getEntitlements } = require('./entitlements');
 const { getExecutiveKpis } = require('./executiveKpiService');
+const { withQuota } = require('./quotaService');
 
 function getPrisma() {
   return getSystemClient();
@@ -131,9 +132,19 @@ async function generateDigestSummary(collegeId, campusId = null) {
   };
 }
 
+/**
+ * Atomically consumes scheduledReports monthly quota when dispatching a scheduled digest.
+ */
+async function dispatchScheduledDigest(collegeId, campusId = null) {
+  return await withQuota(collegeId, 'scheduledReports', 1, async () => {
+    return await generateDigestSummary(collegeId, campusId);
+  });
+}
+
 module.exports = {
   getDigestConfig,
   saveDigestConfig,
-  generateDigestSummary
+  generateDigestSummary,
+  dispatchScheduledDigest
 };
 

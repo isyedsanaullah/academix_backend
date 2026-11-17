@@ -106,15 +106,40 @@ const getFromAddress = () => {
 
 // ── Shared sender ────────────────────────────────────────────────────────────
 
+const { isThreePlanMode } = require('../config/featureFlags');
+
+function isSecurityNotificationSubject(subject = '') {
+  return /\b(2fa|two[- ]factor|otp|verification|verify email|password reset|reset your password|security alert|login alert)\b/i.test(String(subject));
+}
+
 /**
- * Low-level send. Returns { success, messageId?, error? }
+ * Low-level send. Returns { success, messageId?, error?, exemptFromQuota? }
+ * Set isSecurityEmail=true (or verification/2FA/password reset subjects) to ALWAYS bypass bulk email caps.
  * Set throwOnError=true when the caller must know about failures.
  */
-async function send({ to, subject, html, text, throwOnError = false }) {
+async function send({ to, subject, html, text, throwOnError = false, collegeId = null, isSecurityEmail = false }) {
+  const exemptFromQuota = Boolean(isSecurityEmail) || isSecurityNotificationSubject(subject);
   try {
     if (!to || !subject || (!html && !text)) {
       throw new Error('Missing required email fields (to, subject, html or text).');
     }
+
+    let quotaService = null;
+    if (collegeId && !exemptFromQuota) {
+      quotaService = require('./quotaService');
+      const quotaCheck = await quotaService.checkQuota(collegeId, 'emailsSent', 1);
+      if (!quotaCheck.allowed && (isThreePlanMode() || process.env.ENFORCE_EMAIL_QUOTA === 'true')) {
+        const err = new Error(`Monthly email quota exceeded (${quotaCheck.current}/${quotaCheck.limit}). Security/2FA emails remain unaffected.`);
+        err.status = 429;
+        err.code = 'EMAIL_QUOTA_EXCEEDED';
+        err.details = quotaCheck;
+        throw err;
+      }
+      if (quotaCheck.limit > 0 && ((quotaCheck.current + 1) / quotaCheck.limit) >= 0.8) {
+        console.warn(`[EMAIL QUOTA WARNING] College ${collegeId} at ${quotaCheck.current + 1}/${quotaCheck.limit} emails this month.`);
+      }
+    }
+
     const transporter = createTransporter();
     const info = await transporter.sendMail({
       from: getFromAddress(),
@@ -123,13 +148,24 @@ async function send({ to, subject, html, text, throwOnError = false }) {
       html: html || undefined,
       text: text || undefined
     });
+
+    if (collegeId && !exemptFromQuota && quotaService) {
+      await quotaService.recordUsage(collegeId, 'emailsSent', 1).catch((err) => {
+        console.warn('[MailService] Failed to record email usage metric:', err.message);
+      });
+    }
+
     console.log(`[MailService] ✉ Sent "${subject}" → ${to} (id: ${info.messageId})`);
-    return { success: true, messageId: info.messageId };
+    return { success: true, messageId: info.messageId, exemptFromQuota };
   } catch (err) {
     console.error('[MailService] Send failed:', err.message);
-    if (throwOnError) throw err;
-    return { success: false, error: err.message };
+    if (throwOnError || err.code === 'EMAIL_QUOTA_EXCEEDED') throw err;
+    return { success: false, error: err.message, code: err.code };
   }
+}
+
+async function sendSecurityEmail(opts) {
+  return send({ ...opts, isSecurityEmail: true });
 }
 
 // ── Brand constants ───────────────────────────────────────────────────────────
@@ -525,6 +561,8 @@ function generateCode() {
 module.exports = {
   // Core
   send,
+  sendSecurityEmail,
+  isSecurityNotificationSubject,
   buildCollegeshubTemplate,
   toPlainText,
   createTransporter,

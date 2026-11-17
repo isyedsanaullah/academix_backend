@@ -1,6 +1,9 @@
 const { getSystemClient } = require('../config/prismaManager');
 const { getMonthlyKey, PLAN_LIMITS } = require('../config/planConstants');
+const AI_CONFIG = require('../config/aiConfig');
 const { getEntitlements } = require('./entitlements');
+
+const AI_WARNING_THRESHOLD_PCT = 80;
 
 class InsufficientCreditsError extends Error {
   constructor(message, details = {}) {
@@ -20,7 +23,7 @@ async function ensureMonthlyGrant(collegeId, tx = null) {
   const currentPeriodKey = getMonthlyKey(now);
 
   const entitlements = await getEntitlements(collegeId, prisma);
-  const limits = PLAN_LIMITS[entitlements.planId] || PLAN_LIMITS.starter;
+  const limits = entitlements.effectiveLimits || entitlements.baseLimits || PLAN_LIMITS[entitlements.planId] || PLAN_LIMITS.starter;
 
   // 1. Message Credits Grant (if included in plan)
   if (limits.messageCreditsMonthly > 0) {
@@ -214,22 +217,35 @@ async function getAICreditBalance(collegeId, tx = null) {
   });
   const purchasedBalance = Math.max(0, purchasedAgg._sum.delta || 0);
 
+  // Plan monthly allowance (for 80% warning telemetry)
+  const entitlements = await getEntitlements(collegeId, prisma);
+  const limits = entitlements.effectiveLimits || entitlements.baseLimits || PLAN_LIMITS[entitlements.planId] || PLAN_LIMITS.starter;
+  const planMonthlyGrant = Math.max(0, Number(limits.aiCreditsMonthly || 0));
+  const usedFromPlan = Math.max(0, planMonthlyGrant - planBalance);
+  const utilizationPct = planMonthlyGrant > 0
+    ? Math.min(100, Math.round((usedFromPlan / planMonthlyGrant) * 10000) / 100)
+    : (purchasedBalance > 0 ? 0 : 100);
+  const warning80Pct = planMonthlyGrant > 0 && utilizationPct >= AI_WARNING_THRESHOLD_PCT;
+
   return {
     planBalance,
     purchasedBalance,
     totalBalance: planBalance + purchasedBalance,
+    planMonthlyGrant,
+    utilizationPct,
+    warning80Pct,
     periodKey: currentPeriodKey
   };
 }
 
 /**
  * Debits AI Credits following strict dual-bucket ordering:
- * Model tier multiplier:
- * - 'lite': 1 credit = 1 token
- * - 'advanced' / 'standard': 20 credits = 1 token
+ * Model tier multipliers:
+ * - THREE_PLAN_MODE=false: lite=1, advanced=20
+ * - THREE_PLAN_MODE=true:  lite=1, standard=20, advanced=40
  */
 async function debitAICredits(collegeId, rawTokens, modelTier = 'lite', taskType = 'AI_TASK') {
-  const multiplier = modelTier === 'advanced' ? 20 : 1;
+  const multiplier = AI_CONFIG.getMultiplier(modelTier);
   const creditsRequired = rawTokens * multiplier;
   if (creditsRequired <= 0) return { debited: 0 };
 

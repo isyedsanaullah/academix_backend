@@ -27,7 +27,7 @@ class InsufficientAICreditsError extends Error {
  * Checks if a college has sufficient AI credits for an estimated token usage.
  */
 async function assertAICreditsAvailable(collegeId, estimatedTokens = 100, modelTier = 'lite') {
-  const multiplier = AI_CONFIG.tokenMultipliers[modelTier] || 1;
+  const multiplier = AI_CONFIG.getMultiplier(modelTier);
   const creditsRequired = estimatedTokens * multiplier;
   const balances = await getAICreditBalance(collegeId);
 
@@ -58,7 +58,7 @@ async function recordAndDebitUsage({
 }) {
   const prisma = getSystemClient();
   const totalTokens = (promptTokens || 0) + (outputTokens || 0);
-  const multiplier = AI_CONFIG.tokenMultipliers[modelTier] || 1;
+  const multiplier = AI_CONFIG.getMultiplier(modelTier);
   const creditsDebited = totalTokens * multiplier;
   const modelName = AI_CONFIG.models[modelTier] || modelTier;
 
@@ -85,12 +85,18 @@ async function recordAndDebitUsage({
     },
   });
 
+  if (debitResult.balances?.warning80Pct) {
+    console.warn(`[AI QUOTA WARNING] College ${collegeId} at ${debitResult.balances.utilizationPct}% of monthly AI credit grant`);
+  }
+
   return {
     debited: creditsDebited,
     totalTokens,
     modelTier,
     modelName,
     balances: debitResult.balances,
+    warning80Pct: Boolean(debitResult.balances?.warning80Pct),
+    utilizationPct: debitResult.balances?.utilizationPct ?? 0,
     sampleId: sample.id,
   };
 }
