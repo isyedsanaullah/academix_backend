@@ -13,10 +13,21 @@
  */
 
 const { getSystemClient } = require('../config/prismaManager');
+const { isThreePlanMode } = require('../config/featureFlags');
+const { getPlanConfig } = require('../config/planConstants');
 
 const ADVISORY_LOCK_ID = 1234567890;
 const DEFAULT_GRACE_PERIOD_DAYS = 5;
-const GRANDFATHER_DEADLINE = new Date('2027-02-02T00:00:00.000Z');
+
+function getIneligibleAddonTypesForPlan(targetPlanId, threePlan) {
+  if (!threePlan) return [];
+  const allowed = new Set(
+    (getPlanConfig(true).ADDON_CATALOG_SEEDS || [])
+      .filter(s => s.planId === targetPlanId && s.isAvailable !== false)
+      .map(s => s.addonType)
+  );
+  return addonType => !allowed.has(addonType);
+}
 
 // PKT calendar date string YYYY-MM-DD
 function getPktDateString(d = new Date()) {
@@ -141,24 +152,28 @@ async function runLifecycleWorker() {
     // 6. Process each college in memory
     for (const college of colleges) {
       // -----------------------------------------------------------------------
-      // A. Grandfather Sunset Alerts (Target: 2027-02-02)
+      // A. Grandfather Sunset Alerts (strictly for colleges with grandfatheredUntil != null)
       // -----------------------------------------------------------------------
-      const daysToGrandfather = Math.ceil((GRANDFATHER_DEADLINE.getTime() - now.getTime()) / 86400000);
-      const gfThresholds = [
-        { days: 90, event: 'GRANDFATHER_90D' },
-        { days: 60, event: 'GRANDFATHER_60D' },
-        { days: 30, event: 'GRANDFATHER_30D' },
-        { days: 14, event: 'GRANDFATHER_14D' },
-      ];
+      if (college.grandfatheredUntil) {
+        const gfDeadline = new Date(college.grandfatheredUntil);
+        const daysToGrandfather = Math.ceil((gfDeadline.getTime() - now.getTime()) / 86400000);
+        const gfThresholds = [
+          { days: 90, event: 'GRANDFATHER_90D' },
+          { days: 60, event: 'GRANDFATHER_60D' },
+          { days: 30, event: 'GRANDFATHER_30D' },
+          { days: 14, event: 'GRANDFATHER_14D' },
+        ];
 
-      for (const { days, event } of gfThresholds) {
-        if (daysToGrandfather <= days) {
-          if (!hasLog(college.id, event, GRANDFATHER_DEADLINE)) {
-            recordReminder(college.id, event, {
-              collegeId: college.id,
-              type: event,
-              message: `Grandfathered plan sunset alert: Your current terms expire on February 2, 2027 (${daysToGrandfather} days remaining).`
-            }, GRANDFATHER_DEADLINE);
+        for (const { days, event } of gfThresholds) {
+          if (daysToGrandfather <= days && daysToGrandfather >= 0) {
+            if (!hasLog(college.id, event, gfDeadline)) {
+              recordReminder(college.id, event, {
+                collegeId: college.id,
+                type: event,
+                grandfatheredUntil: gfDeadline.toISOString(),
+                message: `Grandfathered plan sunset alert: Your legacy allowance window expires on ${gfDeadline.toISOString().slice(0, 10)} (${daysToGrandfather} days remaining).`
+              }, gfDeadline);
+            }
           }
         }
       }
@@ -277,6 +292,21 @@ async function runLifecycleWorker() {
                 pendingDowngradeBillingCycle: null
               }
             });
+
+            // Suspend ineligible add-ons upon downgrade in 3-plan mode
+            if (isThreePlanMode() && tx.collegeAddon?.findMany) {
+              const isIneligible = getIneligibleAddonTypesForPlan(targetPlan, true);
+              const activeCollegeAddons = await tx.collegeAddon.findMany({
+                where: { college_id: college.id, status: 'ACTIVE' }
+              });
+              const toSuspendIds = activeCollegeAddons.filter(a => isIneligible(a.addonType)).map(a => a.id);
+              if (toSuspendIds.length > 0) {
+                await tx.collegeAddon.updateMany({
+                  where: { id: { in: toSuspendIds } },
+                  data: { status: 'SUSPENDED_BY_DOWNGRADE' }
+                });
+              }
+            }
             downgradesApplied++;
           }
         }

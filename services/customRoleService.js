@@ -63,6 +63,36 @@ async function countAdminClassUsers(collegeId, dbClient = null) {
 }
 
 /**
+ * Option (c) Post-Grandfathering Admin Soft Cap:
+ * Existing >15 admin accounts stay active & operational, while creating/promoting a new admin
+ * beyond maxAdmins fails with 429 QUOTA_EXCEEDED and recommends Custom Quote.
+ */
+async function assertAdminSlotAvailable(collegeId, dbClient = null) {
+  const prisma = dbClient || getPrisma();
+  const [entitlements, currentCount] = await Promise.all([
+    getEntitlements(collegeId, prisma),
+    countAdminClassUsers(collegeId, prisma)
+  ]);
+  const maxAdmins = Number(entitlements.effectiveLimits?.maxAdmins ?? 2);
+  if (maxAdmins >= 0 && currentCount >= maxAdmins) {
+    throw Object.assign(
+      new Error(`Administrator account limit reached (${currentCount}/${maxAdmins}). Existing admin accounts remain active; contact sales for a Custom Quote to add more.`),
+      {
+        status: 429,
+        code: 'QUOTA_EXCEEDED',
+        details: {
+          metric: 'admins',
+          current: currentCount,
+          limit: maxAdmins,
+          customQuoteRecommended: true
+        }
+      }
+    );
+  }
+  return { currentCount, maxAdmins };
+}
+
+/**
  * Check if a specific user is currently considered admin-class
  */
 async function isUserAdminClass(collegeId, userId, dbClient = null) {
@@ -742,6 +772,7 @@ async function getCustomRole(collegeId, roleId) {
 
 module.exports = {
   countAdminClassUsers,
+  assertAdminSlotAvailable,
   isUserAdminClass,
   getUserPermissions,
   createCustomRole,

@@ -5,6 +5,7 @@
 
 const { getSystemClient } = require('../config/prismaManager');
 const { PLAN_LIMITS } = require('../services/entitlements');
+const { isThreePlanMode } = require('../config/featureFlags');
 
 /**
  * GET /api/super-admin/plans
@@ -31,15 +32,22 @@ async function getPlans(req, res) {
     }
 
     // Group by planId
-    const plansMap = {
-      starter: { id: 'starter', name: 'Starter', versions: [] },
-      standard: { id: 'standard', name: 'Standard', versions: [] },
-      premium: { id: 'premium', name: 'Premium', versions: [] },
-      enterprise: { id: 'enterprise', name: 'Enterprise', versions: [] }
-    };
+    const plansMap = isThreePlanMode()
+      ? {
+          starter: { id: 'starter', name: 'Starter', versions: [] },
+          standard: { id: 'standard', name: 'Standard', versions: [] },
+          premium: { id: 'premium', name: 'Premium', versions: [] }
+        }
+      : {
+          starter: { id: 'starter', name: 'Starter', versions: [] },
+          standard: { id: 'standard', name: 'Standard', versions: [] },
+          premium: { id: 'premium', name: 'Premium', versions: [] },
+          enterprise: { id: 'enterprise', name: 'Enterprise', versions: [] }
+        };
 
     for (const pv of allVersions) {
       const planKey = pv.planId.toLowerCase();
+      if (isThreePlanMode() && planKey === 'enterprise') continue;
       if (!plansMap[planKey]) {
         plansMap[planKey] = { id: pv.planId, name: pv.planId, versions: [] };
       }

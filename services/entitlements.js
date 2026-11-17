@@ -134,10 +134,16 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
     }
   }
 
-  // CollegeQuotaOverride replaces base limit
+  // CollegeQuotaOverride replaces base limit (grandfathering overrides expire after college.grandfatheredUntil)
   const baseWithOverrides = { ...baseLimits };
+  const isGrandfatherExpired = Boolean(
+    college.grandfatheredUntil && new Date(college.grandfatheredUntil) < now
+  );
   if (college.quotaOverrides && college.quotaOverrides.length > 0) {
     for (const qo of college.quotaOverrides) {
+      if (isGrandfatherExpired && qo.reason === 'ENTERPRISE_RETIREMENT_GRANDFATHER') {
+        continue;
+      }
       baseWithOverrides[qo.metric] = Number(qo.overrideValue);
     }
   }
@@ -374,6 +380,10 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
     planId,
     billingCycle: college.billingCycle || 'MONTHLY',
     subStatus: college.subStatus,
+    isCustomQuote: Boolean(college.isCustomQuote),
+    customQuoteNotes: college.customQuoteNotes || null,
+    grandfatheredUntil: college.grandfatheredUntil || null,
+    grandfatherReason: college.grandfatherReason || null,
     trialEndsAt: college.trialEndsAt,
     periodStart: college.periodStart,
     periodEnd: college.periodEnd,

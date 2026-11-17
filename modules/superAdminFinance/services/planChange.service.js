@@ -5,8 +5,10 @@ const {
   CANONICAL_PLANS,
   PLAN_LEVEL,
   PLAN_LIMITS,
+  getPlanConfig,
   normalizePlanId
 } = require('../../../config/planConstants');
+const { isThreePlanMode } = require('../../../config/featureFlags');
 const { derivePlanPrice } = require('./collegeBilling.service');
 const { clearOverviewCache } = require('./overview.service');
 
@@ -27,6 +29,13 @@ const { clearOverviewCache } = require('./overview.service');
  */
 async function changeCollegePlan(collegeIdOrCode, rawTargetPlanId, reason, adminUser = {}) {
   const prisma = getSystemClient();
+  const rawLower = String(rawTargetPlanId || '').toLowerCase().trim();
+  if (isThreePlanMode() && rawLower === 'enterprise') {
+    const err = new Error('The Enterprise plan is retired under Three-Plan Mode. Select starter, standard, or premium (with optional Custom Quote).');
+    err.statusCode = 400;
+    err.code = 'PLAN_RETIRED';
+    throw err;
+  }
   const targetPlanId = normalizePlanId(rawTargetPlanId);
 
   if (!CANONICAL_PLANS.includes(targetPlanId)) {
@@ -163,6 +172,24 @@ async function changeCollegePlan(collegeIdOrCode, rawTargetPlanId, reason, admin
       where: { id: college.id },
       data: updateData
     });
+
+    if (!isScheduled && isDowngrade && isThreePlanMode() && tx.collegeAddon?.findMany) {
+      const allowedAddons = new Set(
+        (getPlanConfig(true).ADDON_CATALOG_SEEDS || [])
+          .filter(s => s.planId === targetPlanId && s.isAvailable !== false)
+          .map(s => s.addonType)
+      );
+      const activeAddons = await tx.collegeAddon.findMany({
+        where: { college_id: college.id, status: 'ACTIVE' }
+      });
+      const toSuspendIds = activeAddons.filter(a => !allowedAddons.has(a.addonType)).map(a => a.id);
+      if (toSuspendIds.length > 0) {
+        await tx.collegeAddon.updateMany({
+          where: { id: { in: toSuspendIds } },
+          data: { status: 'SUSPENDED_BY_DOWNGRADE' }
+        });
+      }
+    }
 
     // Write audit log
     await tx.collegeEntitlementAudit.create({

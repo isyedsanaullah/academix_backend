@@ -15,39 +15,42 @@ const {
   getCollegeInviteStatus: serviceGetInviteStatus
 } = require('../services/collegeProvisioning');
 
-const { CANONICAL_PLANS, PLAN_LEVEL, PLAN_PRICING, PLAN_LIMITS } = require('../config/planConstants');
+const { CANONICAL_PLANS, PLAN_LEVEL, PLAN_PRICING, PLAN_LIMITS, ADDON_CATALOG_SEEDS } = require('../config/planConstants');
 const { CATEGORIES, FEATURE_REGISTRY } = require('../config/featureRegistry');
+const { isThreePlanMode } = require('../config/featureFlags');
 
-const VALID_PLANS = ['starter', 'standard', 'premium', 'enterprise', 'free', 'basic', 'ownership', 'custom', 'professional'];
+const VALID_PLANS_LEGACY = ['starter', 'standard', 'premium', 'enterprise', 'free', 'basic', 'ownership', 'custom', 'professional'];
+const VALID_PLANS_THREE = ['starter', 'standard', 'premium', 'custom_quote'];
 const VALID_STATUSES = ['new', 'contacted', 'approved', 'rejected'];
 
-/**
- * @desc    Get all active subscription plans and add-on catalog for public display
- * @route   GET /api/public/subscription-plans
- * @access  Public
- */
 exports.getSubscriptionPlans = async (req, res, next) => {
   try {
+    const threePlan = isThreePlanMode();
     const prisma = getSystemClient();
-    const plans = await prisma.subscription.findMany({
+    const dbPlans = await prisma.subscription.findMany({
       where: {
         isActive: true,
         planId: { in: CANONICAL_PLANS }
       }
     });
 
-    // Sort canonically: starter -> standard -> premium -> enterprise
-    plans.sort((a, b) => (PLAN_LEVEL[a.planId] ?? 0) - (PLAN_LEVEL[b.planId] ?? 0));
-
-    // Normalize plans with explicit monthlyPrice and yearlyPrice properties for frontend consumers
-    const formattedPlans = plans.map(p => {
-      const canonicalPrice = PLAN_PRICING[p.planId] || { monthly: 0, yearly: 0 };
-      const monthlyPrice = p.priceMonthlyPkr ?? p.price?.monthly ?? canonicalPrice.monthly;
-      const yearlyPrice = p.priceYearlyPkr ?? p.price?.yearly ?? canonicalPrice.yearly;
+    const formattedPlans = CANONICAL_PLANS.map(planId => {
+      const dbRow = dbPlans.find(p => p.planId === planId);
+      const canonicalPrice = PLAN_PRICING[planId] || { monthly: 0, yearly: 0 };
+      const canonicalLimits = PLAN_LIMITS[planId] || {};
+      const monthlyPrice = threePlan
+        ? canonicalPrice.monthly
+        : (dbRow?.priceMonthlyPkr ?? dbRow?.price?.monthly ?? canonicalPrice.monthly);
+      const yearlyPrice = threePlan
+        ? canonicalPrice.yearly
+        : (dbRow?.priceYearlyPkr ?? dbRow?.price?.yearly ?? canonicalPrice.yearly);
       return {
-        ...p,
+        ...(dbRow || {}),
+        planId,
+        name: dbRow?.name || (planId.charAt(0).toUpperCase() + planId.slice(1)),
         monthlyPrice,
         yearlyPrice,
+        limits: canonicalLimits,
         price: {
           monthly: monthlyPrice,
           yearly: yearlyPrice,
@@ -56,23 +59,39 @@ exports.getSubscriptionPlans = async (req, res, next) => {
       };
     });
 
-    // Fetch public add-on pricing catalog
-    const addons = await prisma.addonCatalog.findMany({
-      where: { isAvailable: true },
-      orderBy: [{ addonType: 'asc' }, { planId: 'asc' }]
-    });
+    let addons = [];
+    if (threePlan) {
+      addons = ADDON_CATALOG_SEEDS;
+    } else {
+      addons = await prisma.addonCatalog.findMany({
+        where: { isAvailable: true },
+        orderBy: [{ addonType: 'asc' }, { planId: 'asc' }]
+      });
+    }
 
-    res.json({
-      success: true,
-      data: {
-        plans: formattedPlans,
-        addons,
-        counts: {
+    const counts = threePlan
+      ? {
+          starter: 33,
+          standard: 88,
+          premium: 153,
+          addonOnly: 9,
+          total: 162,
+          live: { starter: 26, standard: 70, premium: 86 }
+        }
+      : {
           starter: 33,
           standard: 88,
           premium: 141,
           enterprise: 162
-        }
+        };
+
+    res.json({
+      success: true,
+      data: {
+        threePlanMode: threePlan,
+        plans: formattedPlans,
+        addons,
+        counts
       }
     });
   } catch (error) {
@@ -80,14 +99,10 @@ exports.getSubscriptionPlans = async (req, res, next) => {
   }
 };
 
-/**
- * @desc    Get full 162-service catalog across 10 categories for public directory
- * @route   GET /api/public/services-catalog
- * @access  Public
- */
 exports.getPublicServicesCatalog = async (req, res, next) => {
   try {
-    const { category, plan, search } = req.query;
+    const threePlan = isThreePlanMode();
+    const { category, plan, search, addonOnly } = req.query;
 
     let filtered = [...FEATURE_REGISTRY];
 
@@ -95,9 +110,16 @@ exports.getPublicServicesCatalog = async (req, res, next) => {
       filtered = filtered.filter(f => f.category.toLowerCase() === category.toLowerCase());
     }
 
-    if (plan) {
-      const targetLvl = PLAN_LEVEL[plan.toLowerCase()] ?? 0;
-      filtered = filtered.filter(f => (PLAN_LEVEL[f.startsIn] ?? 0) <= targetLvl);
+    if (addonOnly === 'true') {
+      filtered = filtered.filter(f => f.addonOnly);
+    } else if (plan) {
+      const normalized = String(plan).toLowerCase();
+      if (normalized === 'addon' || normalized === 'addononly') {
+        filtered = filtered.filter(f => f.addonOnly);
+      } else {
+        const targetLvl = PLAN_LEVEL[normalized] ?? 0;
+        filtered = filtered.filter(f => !f.addonOnly && f.startsIn && (PLAN_LEVEL[f.startsIn] ?? 99) <= targetLvl);
+      }
     }
 
     if (search) {
@@ -110,11 +132,18 @@ exports.getPublicServicesCatalog = async (req, res, next) => {
       );
     }
 
-    res.json({
-      success: true,
-      data: {
-        categories: CATEGORIES,
-        summary: {
+    const summary = threePlan
+      ? {
+          total: FEATURE_REGISTRY.length,
+          live: FEATURE_REGISTRY.filter(f => f.status === 'live').length,
+          comingSoon: FEATURE_REGISTRY.filter(f => f.status !== 'live').length,
+          starter: 33,
+          standard: 88,
+          premium: 153,
+          addonOnly: 9,
+          liveByPlan: { starter: 26, standard: 70, premium: 86 }
+        }
+      : {
           total: FEATURE_REGISTRY.length,
           live: FEATURE_REGISTRY.filter(f => f.status === 'live').length,
           comingSoon: FEATURE_REGISTRY.filter(f => f.status === 'coming_soon').length,
@@ -122,7 +151,14 @@ exports.getPublicServicesCatalog = async (req, res, next) => {
           standard: 88,
           premium: 141,
           enterprise: 162
-        },
+        };
+
+    res.json({
+      success: true,
+      data: {
+        threePlanMode: threePlan,
+        categories: CATEGORIES,
+        summary,
         services: filtered
       }
     });
@@ -166,8 +202,13 @@ exports.submitSubscriptionRequest = async (req, res, next) => {
     if (!phone?.trim() || !isValidPhone(phone)) {
       return res.status(400).json({ success: false, message: 'A valid contact phone number is required' });
     }
-    if (!selectedPlan || !VALID_PLANS.includes(selectedPlan.toLowerCase())) {
-      return res.status(400).json({ success: false, message: 'Invalid subscription plan selected' });
+    const allowedPlans = isThreePlanMode() ? VALID_PLANS_THREE : VALID_PLANS_LEGACY;
+    if (!selectedPlan || !allowedPlans.includes(selectedPlan.toLowerCase())) {
+      return res.status(400).json({
+        success: false,
+        code: isThreePlanMode() && String(selectedPlan || '').toLowerCase() === 'enterprise' ? 'PLAN_RETIRED' : 'INVALID_PLAN',
+        message: 'Invalid subscription plan selected'
+      });
     }
     
     const parsedStudents = parseInt(studentCount, 10);

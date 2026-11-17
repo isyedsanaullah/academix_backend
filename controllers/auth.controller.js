@@ -80,6 +80,23 @@ exports.register = async (req, res, next) => {
       assignedCollegeId = req.user.college_id;
     }
 
+    if (assignedCollegeId && String(role || '').toLowerCase() === 'admin') {
+      const { assertAdminSlotAvailable } = require('../services/customRoleService');
+      try {
+        await assertAdminSlotAvailable(assignedCollegeId, prisma);
+      } catch (capErr) {
+        if (capErr.status === 429) {
+          return res.status(429).json({
+            success: false,
+            code: capErr.code,
+            message: capErr.message,
+            details: capErr.details
+          });
+        }
+        throw capErr;
+      }
+    }
+
     // Hash password
     const salt = await bcrypt.genSalt(12);
     const hashedPassword = password ? await bcrypt.hash(password, salt) : null;

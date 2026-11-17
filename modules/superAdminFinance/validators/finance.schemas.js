@@ -1,6 +1,7 @@
 'use strict';
 
 const { CANONICAL_PLANS, PAYMENT_STATUSES, PAYMENT_TYPES } = require('../definitions');
+const { getPlanConfig } = require('../../../config/planConstants');
 
 function parseBoolean(val, defaultVal = false) {
   if (val === undefined || val === null || val === '') return defaultVal;
@@ -82,9 +83,10 @@ function validatePlanChange(body = {}) {
   const errors = [];
   const targetPlanId = String(body.targetPlanId || '').toLowerCase().trim();
   const reason = String(body.reason || '').trim();
+  const activePlans = getPlanConfig().CANONICAL_PLANS || CANONICAL_PLANS;
 
-  if (!CANONICAL_PLANS.includes(targetPlanId)) {
-    errors.push(`targetPlanId must be one of: ${CANONICAL_PLANS.join(', ')}`);
+  if (!activePlans.includes(targetPlanId)) {
+    errors.push(`targetPlanId must be one of: ${activePlans.join(', ')}`);
   }
 
   if (!reason || reason.length < 5) {

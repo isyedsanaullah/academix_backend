@@ -163,6 +163,10 @@ async function getCurrentSubscription(req, res) {
         planId: entitlements.planId,
         billingCycle: entitlements.billingCycle,
         subStatus: entitlements.subStatus,
+        isCustomQuote: Boolean(entitlements.isCustomQuote),
+        customQuoteNotes: entitlements.customQuoteNotes || null,
+        grandfatheredUntil: entitlements.grandfatheredUntil || null,
+        grandfatherReason: entitlements.grandfatherReason || null,
         trialEndsAt: entitlements.trialEndsAt,
         periodStart: entitlements.periodStart,
         periodEnd: entitlements.periodEnd,
@@ -177,6 +181,9 @@ async function getCurrentSubscription(req, res) {
           campuses: usageMap.campuses || 0,
           storageBytes: usageMap.storageBytes || 0,
           applications: usageMap.applications || 0,
+          emailsSent: usageMap.emailsSent || 0,
+          scheduledReports: usageMap.scheduledReports || 0,
+          omrSheets: usageMap.omrSheets || 0,
           aiQuizGenerations: usageMap.aiQuizGenerations || 0,
           aiNotesGenerations: usageMap.aiNotesGenerations || 0,
           documentOcr: usageMap.documentOcr || 0,
@@ -386,6 +393,13 @@ async function submitPaymentProof(req, res) {
     }
 
     // 3. Compute expected amount dynamically from plans and catalog
+    if (isThreePlanMode() && String(targetPlanId || '').toLowerCase() === 'enterprise') {
+      return res.status(400).json({
+        success: false,
+        code: 'PLAN_RETIRED',
+        message: 'The Enterprise plan is retired under Three-Plan Mode. Select Starter, Standard, or Premium.'
+      });
+    }
     const entitlements = await getEntitlements(collegeId, prisma);
     const resolvedPlanId = normalizePlanId(targetPlanId || entitlements.planId);
     const cycle = targetCycle.toUpperCase() === 'YEARLY' ? 'YEARLY' : 'MONTHLY';
@@ -497,6 +511,13 @@ async function calculateTotal(req, res) {
       lineItems = []
     } = req.body;
 
+    if (isThreePlanMode() && String(targetPlanId || '').toLowerCase() === 'enterprise') {
+      return res.status(400).json({
+        success: false,
+        code: 'PLAN_RETIRED',
+        message: 'The Enterprise plan is retired under Three-Plan Mode. Select Starter, Standard, or Premium.'
+      });
+    }
     const prisma = getSystemClient();
     const entitlements = await getEntitlements(collegeId, prisma);
     const resolvedPlanId = normalizePlanId(targetPlanId || entitlements.planId);
