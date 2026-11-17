@@ -3,9 +3,105 @@ const {
   CANONICAL_PLANS,
   PLAN_PRICING,
   PLAN_LIMITS,
+  ADDON_CATALOG_SEEDS,
   normalizePlanId
 } = require('../config/planConstants');
+const { isThreePlanMode } = require('../config/featureFlags');
 const { getEntitlements } = require('../services/entitlements');
+
+function getThreePlanSeed(addonType, planId) {
+  if (!isThreePlanMode()) return null;
+  return ADDON_CATALOG_SEEDS.find(s => s.addonType === addonType && s.planId === planId) || null;
+}
+
+function applyThreePlanAddonPolicy(row, planId) {
+  if (!isThreePlanMode()) return row;
+  const seed = getThreePlanSeed(row.addonType, planId);
+  if (!seed) return null; // Retired (e.g., ADMINS) or invalid for plan in 3-plan mode
+  return {
+    ...row,
+    name: seed.name,
+    unitPriceMonthlyPkr: seed.unitPriceMonthlyPkr,
+    unitPriceYearlyPkr: seed.unitPriceYearlyPkr,
+    maxCapPercentOfBase: seed.maxCapPercentOfBase,
+    maxUnitsStatic: seed.maxUnitsStatic,
+    isAvailable: row.isAvailable !== false && seed.isAvailable !== false,
+    isPurchasable: row.isPurchasable !== false && seed.isPurchasable !== false
+  };
+}
+
+async function validateAddonLineItems(prisma, lineItems, resolvedPlanId, cycle) {
+  let addonSubtotal = 0;
+  const validated = [];
+
+  if (!Array.isArray(lineItems) || lineItems.length === 0) {
+    return { addonSubtotal, validated, error: null };
+  }
+
+  for (const item of lineItems) {
+    if (!item.addonType || !item.quantity || item.quantity <= 0) continue;
+
+    const threePlan = isThreePlanMode();
+    const seed = threePlan ? getThreePlanSeed(item.addonType, resolvedPlanId) : null;
+    if (threePlan && !seed) {
+      return {
+        error: {
+          status: 400,
+          code: 'INVALID_ADDON_ITEM',
+          message: `Add-on '${item.addonType}' is not available for plan '${resolvedPlanId}'.`
+        }
+      };
+    }
+
+    const dbRow = await prisma.addonCatalog.findUnique({
+      where: {
+        addonType_planId: {
+          addonType: item.addonType,
+          planId: resolvedPlanId
+        }
+      }
+    });
+
+    const catalogRow = threePlan
+      ? (dbRow ? applyThreePlanAddonPolicy(dbRow, resolvedPlanId) : seed)
+      : dbRow;
+
+    if (!catalogRow || !catalogRow.isAvailable) {
+      return {
+        error: {
+          status: 400,
+          code: 'INVALID_ADDON_ITEM',
+          message: `Add-on '${item.addonType}' is not available for plan '${resolvedPlanId}'.`
+        }
+      };
+    }
+
+    if (catalogRow.isPurchasable === false) {
+      return {
+        error: {
+          status: 422,
+          code: 'ITEM_NOT_PURCHASABLE',
+          message: `Item '${item.addonType}' is coming soon and is currently not purchasable.`
+        }
+      };
+    }
+
+    const unitPrice = cycle === 'YEARLY' ? catalogRow.unitPriceYearlyPkr : catalogRow.unitPriceMonthlyPkr;
+    const subtotal = unitPrice * item.quantity;
+    addonSubtotal += subtotal;
+
+    validated.push({
+      itemType: 'ADDON',
+      addonType: item.addonType,
+      name: catalogRow.name,
+      quantity: item.quantity,
+      unitPrice,
+      subtotal
+    });
+  }
+
+  return { addonSubtotal, validated, error: null };
+}
 const {
   getMessageCreditBalance,
   getAICreditBalance
@@ -130,13 +226,31 @@ async function getAddonCatalog(req, res) {
     const baseLimits = entitlements.baseLimits;
 
     // Fetch catalog rows for current plan tier
-    const catalogRows = await prisma.addonCatalog.findMany({
+    const dbCatalogRows = await prisma.addonCatalog.findMany({
       where: {
         planId,
         isAvailable: true
       },
       orderBy: { addonType: 'asc' }
     });
+
+    let catalogRows = dbCatalogRows;
+    if (isThreePlanMode()) {
+      const merged = new Map();
+      for (const dbRow of dbCatalogRows) {
+        const effective = applyThreePlanAddonPolicy(dbRow, planId);
+        if (effective) merged.set(effective.addonType, effective);
+      }
+      for (const seed of ADDON_CATALOG_SEEDS) {
+        if (seed.planId === planId && seed.isAvailable !== false && !merged.has(seed.addonType)) {
+          merged.set(seed.addonType, {
+            id: `seed:${seed.addonType}:${seed.planId}`,
+            ...seed
+          });
+        }
+      }
+      catalogRows = Array.from(merged.values()).sort((a, b) => a.addonType.localeCompare(b.addonType));
+    }
 
     // Compute remaining cap capacity per add-on
     const activeAddons = entitlements.activeAddons || [];
@@ -177,7 +291,8 @@ async function getAddonCatalog(req, res) {
         maxUnitsAllowed,
         currentUtilized,
         remainingUnitsAllowed,
-        isAvailable: row.isAvailable && (remainingUnitsAllowed === null || remainingUnitsAllowed > 0)
+        isAvailable: row.isAvailable && (remainingUnitsAllowed === null || remainingUnitsAllowed > 0),
+        isPurchasable: row.isPurchasable !== false
       };
     });
 
@@ -312,49 +427,16 @@ async function submitPaymentProof(req, res) {
     }
 
     // Process line items for Add-Ons and Credit Packs
-    if (Array.isArray(lineItems) && lineItems.length > 0) {
-      for (const item of lineItems) {
-        if (!item.addonType || !item.quantity || item.quantity <= 0) continue;
-
-        const catalogRow = await prisma.addonCatalog.findUnique({
-          where: {
-            addonType_planId: {
-              addonType: item.addonType,
-              planId: resolvedPlanId
-            }
-          }
-        });
-
-        if (!catalogRow || !catalogRow.isAvailable) {
-          return res.status(400).json({
-            success: false,
-            code: 'INVALID_ADDON_ITEM',
-            message: `Add-on '${item.addonType}' is not available for plan '${resolvedPlanId}'.`
-          });
-        }
-
-        if (catalogRow.isPurchasable === false) {
-          return res.status(422).json({
-            success: false,
-            code: 'ITEM_NOT_PURCHASABLE',
-            message: `Item '${item.addonType}' is currently not purchasable. Real drivers will be enabled when SMS/WhatsApp goes live.`
-          });
-        }
-
-        const unitPrice = cycle === 'YEARLY' ? catalogRow.unitPriceYearlyPkr : catalogRow.unitPriceMonthlyPkr;
-        const subtotal = unitPrice * item.quantity;
-        expectedAmount += subtotal;
-
-        validatedLineItems.push({
-          itemType: 'ADDON',
-          addonType: item.addonType,
-          name: catalogRow.name,
-          quantity: item.quantity,
-          unitPrice,
-          subtotal
-        });
-      }
+    const addonCheck = await validateAddonLineItems(prisma, lineItems, resolvedPlanId, cycle);
+    if (addonCheck.error) {
+      return res.status(addonCheck.error.status).json({
+        success: false,
+        code: addonCheck.error.code,
+        message: addonCheck.error.message
+      });
     }
+    expectedAmount += addonCheck.addonSubtotal;
+    validatedLineItems.push(...addonCheck.validated);
 
     const actualPaid = typeof amountPaid === 'number' ? Math.round(amountPaid) : expectedAmount;
     const submittedBy = req.user?.email || req.user?.id || 'college-admin';
@@ -456,50 +538,16 @@ async function calculateTotal(req, res) {
     }
 
     // Process line items for Add-Ons and Credit Packs
-    let addonSubtotal = 0;
-    if (Array.isArray(lineItems) && lineItems.length > 0) {
-      for (const item of lineItems) {
-        if (!item.addonType || !item.quantity || item.quantity <= 0) continue;
-
-        const catalogRow = await prisma.addonCatalog.findUnique({
-          where: {
-            addonType_planId: {
-              addonType: item.addonType,
-              planId: resolvedPlanId
-            }
-          }
-        });
-
-        if (!catalogRow || !catalogRow.isAvailable) {
-          return res.status(400).json({
-            success: false,
-            code: 'INVALID_ADDON_ITEM',
-            message: `Add-on '${item.addonType}' is not available for plan '${resolvedPlanId}'.`
-          });
-        }
-
-        if (catalogRow.isPurchasable === false) {
-          return res.status(422).json({
-            success: false,
-            code: 'ITEM_NOT_PURCHASABLE',
-            message: `Item '${item.addonType}' is currently not purchasable. Real drivers will be enabled when SMS/WhatsApp goes live.`
-          });
-        }
-
-        const unitPrice = cycle === 'YEARLY' ? catalogRow.unitPriceYearlyPkr : catalogRow.unitPriceMonthlyPkr;
-        const subtotal = unitPrice * item.quantity;
-        addonSubtotal += subtotal;
-
-        validatedLineItems.push({
-          itemType: 'ADDON',
-          addonType: item.addonType,
-          name: catalogRow.name,
-          quantity: item.quantity,
-          unitPrice,
-          subtotal
-        });
-      }
+    const addonCheck = await validateAddonLineItems(prisma, lineItems, resolvedPlanId, cycle);
+    if (addonCheck.error) {
+      return res.status(addonCheck.error.status).json({
+        success: false,
+        code: addonCheck.error.code,
+        message: addonCheck.error.message
+      });
     }
+    const addonSubtotal = addonCheck.addonSubtotal;
+    validatedLineItems.push(...addonCheck.validated);
 
     const netBaseAmount = Math.max(0, basePlanAmount - prorationCredit);
     const expectedAmount = netBaseAmount + addonSubtotal;
