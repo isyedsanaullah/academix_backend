@@ -9,19 +9,13 @@ function testFeatureFlagDefaults() {
   const prev = process.env.THREE_PLAN_MODE;
   try {
     delete process.env.THREE_PLAN_MODE;
-    assert.strictEqual(isThreePlanMode(), false, 'THREE_PLAN_MODE unset must default to false');
+    assert.strictEqual(isThreePlanMode(), true, 'Unified 3-plan mode must always be active when env unset');
 
     process.env.THREE_PLAN_MODE = '';
-    assert.strictEqual(isThreePlanMode(), false, 'THREE_PLAN_MODE empty must be false');
+    assert.strictEqual(isThreePlanMode(), true, 'Unified 3-plan mode must always be active regardless of empty env');
 
     process.env.THREE_PLAN_MODE = 'false';
-    assert.strictEqual(isThreePlanMode(), false, 'THREE_PLAN_MODE=false must be false');
-
-    process.env.THREE_PLAN_MODE = 'TRUE';
-    assert.strictEqual(isThreePlanMode(), true, 'THREE_PLAN_MODE=TRUE must be true');
-
-    process.env.THREE_PLAN_MODE = 'true';
-    assert.strictEqual(isThreePlanMode(), true, 'THREE_PLAN_MODE=true must be true');
+    assert.strictEqual(isThreePlanMode(), true, 'Unified 3-plan mode must always be active even if env=false');
   } finally {
     if (prev === undefined) delete process.env.THREE_PLAN_MODE;
     else process.env.THREE_PLAN_MODE = prev;

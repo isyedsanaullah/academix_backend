@@ -235,9 +235,9 @@ async function run() {
 
   console.log('  ✔ Free trial enforces low TRIAL_QUOTA_LIMITS while paid colleges receive full plan limits');
 
-  // ── 3. THREE_PLAN_MODE=true Catalog Verification ──────────────────────────
+  // ── 3. Permanent Fixed 3-Plan Catalog + Super Admin Dynamic Price Variation ──
   const prevThreePlan = process.env.THREE_PLAN_MODE;
-  process.env.THREE_PLAN_MODE = 'true';
+  delete process.env.THREE_PLAN_MODE;
   try {
     const emptyPrisma = {
       subscription: { findMany: async () => [] },
@@ -255,9 +255,30 @@ async function run() {
     assert.strictEqual(byId.standard.yearlyPrice, 65989);
     assert.strictEqual(byId.premium.monthlyPrice, 14999);
     assert.strictEqual(byId.premium.yearlyPrice, 164989);
-    assert.strictEqual(byId.enterprise, undefined, 'Legacy Enterprise plan must NOT appear in 3-plan mode');
+    assert.strictEqual(byId.enterprise, undefined, 'Legacy Enterprise plan must NEVER appear');
 
-    console.log('  ✔ THREE_PLAN_MODE=true serves exact 3 canonical plans (Starter/Standard/Premium)');
+    // When Super Admin publishes a new PlanVersion price, getPlansCatalog returns the Super Admin price
+    const superAdminUpdatedPrisma = {
+      subscription: { findMany: async () => [] },
+      addonCatalog: { findMany: async () => [] },
+      planVersion: {
+        findMany: async () => [
+          {
+            id: 'pv-std-v2',
+            planId: 'standard',
+            version: 2,
+            pricesJson: { monthlyPkr: 6499, yearlyPkr: 71489 },
+            limitsJson: null,
+          },
+        ],
+      },
+    };
+    const updatedCatalog = await getPlansCatalog(superAdminUpdatedPrisma);
+    const updatedById = Object.fromEntries(updatedCatalog.plans.map((p) => [p.planId, p]));
+    assert.strictEqual(updatedById.standard.monthlyPrice, 6499);
+    assert.strictEqual(updatedById.standard.yearlyPrice, 71489);
+
+    console.log('  ✔ Fixed 3 plans work without env flag & reflect Super Admin PlanVersion price updates');
   } finally {
     if (prevThreePlan === undefined) delete process.env.THREE_PLAN_MODE;
     else process.env.THREE_PLAN_MODE = prevThreePlan;
@@ -270,3 +291,4 @@ run().catch((err) => {
   console.error('❌ Test failed:', err);
   process.exit(1);
 });
+

@@ -351,15 +351,13 @@ const THREE_PLAN_CONFIG = {
 // 3. RUNTIME CONFIG SELECTION & DYNAMIC PROXIES
 // =============================================================================
 
-function getPlanConfig(threePlanOverride) {
-  const active = threePlanOverride !== undefined ? Boolean(threePlanOverride) : isThreePlanMode();
-  return active ? THREE_PLAN_CONFIG : LEGACY_4PLAN_CONFIG;
+function getPlanConfig() {
+  return THREE_PLAN_CONFIG;
 }
 
-function getPlanLimits(rawPlan, threePlanOverride) {
-  const cfg = getPlanConfig(threePlanOverride);
-  const id = normalizePlanId(rawPlan, threePlanOverride);
-  return cfg.PLAN_LIMITS[id] || cfg.PLAN_LIMITS.starter;
+function getPlanLimits(rawPlan) {
+  const id = normalizePlanId(rawPlan);
+  return THREE_PLAN_CONFIG.PLAN_LIMITS[id] || THREE_PLAN_CONFIG.PLAN_LIMITS.starter;
 }
 
 function makeDynamicObjectProxy(selectObj) {
@@ -401,15 +399,13 @@ function makeDynamicArrayProxy(selectArr) {
 }
 
 /**
- * Normalizes raw plan string to canonical plan ID.
- * When THREE_PLAN_MODE is active, 'enterprise' aliases to 'premium'.
+ * Normalizes raw plan string to canonical 3-plan ID ('starter' | 'standard' | 'premium').
+ * Legacy 'enterprise' aliases upward to 'premium'.
  */
-const normalizePlanId = (rawPlan, threePlanOverride) => {
-  const threePlan = threePlanOverride !== undefined ? Boolean(threePlanOverride) : isThreePlanMode();
+const normalizePlanId = (rawPlan) => {
   if (!rawPlan || typeof rawPlan !== 'string') return 'starter';
   const clean = rawPlan.toLowerCase().trim();
-  if (clean.startsWith('ent')) return threePlan ? 'premium' : 'enterprise';
-  if (clean.startsWith('prem')) return 'premium';
+  if (clean.startsWith('ent') || clean.startsWith('prem')) return 'premium';
   if (clean.startsWith('stand')) return 'standard';
   return 'starter'; // maps 'basic', 'free', etc.
 };

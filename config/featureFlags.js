@@ -1,10 +1,11 @@
 'use strict';
 
 /**
- * Runtime feature flags for safe staged rollouts.
+ * Unified 3-plan architecture (Starter, Standard, Premium) is now permanent
+ * across backend, database, and frontend without environment toggles.
  */
 function isThreePlanMode() {
-  return String(process.env.THREE_PLAN_MODE || '').trim().toLowerCase() === 'true';
+  return true;
 }
 
 module.exports = {

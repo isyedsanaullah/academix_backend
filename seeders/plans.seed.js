@@ -4,32 +4,28 @@ const path = require('path');
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 
 const { getSystemClient } = require('../config/prismaManager');
+const { PLAN_PRICING, GB } = require('../config/planConstants');
 
 const plans = [
   {
-    planId: 'basic',
-    name: 'Basic Plan',
-    description: 'Essential college management features for small institutions',
+    planId: 'starter',
+    name: 'Starter Plan',
+    description: 'Core daily operations for smaller institutions',
     features: [
       'students', 'teachers', 'subjects', 'attendance',
       'timetable', 'notices', 'exams', 'results',
       'classes', 'sections', 'sessions', 'announcements',
       'assignments', 'quizzes', 'certificates'
     ],
-    restrictions: [
-      'No AI features',
-      'No biometric/entry system',
-      'No fee management',
-      'Teacher attendance only'
-    ],
-    limits: { maxStudents: 500, maxStaff: 50, maxStorage: 1024 },
-    price: { monthly: 0, yearly: 0, currency: 'PKR' },
+    restrictions: ['No AI features', 'No fee management'],
+    limits: { maxStudents: 300, maxStaff: 20, maxStorageGb: 5 },
+    price: { monthly: PLAN_PRICING.starter.monthly, yearly: PLAN_PRICING.starter.yearly, currency: 'PKR' },
     isAI: false
   },
   {
     planId: 'standard',
     name: 'Standard Plan',
-    description: 'Advanced management with fee tracking, analytics, and entry system',
+    description: 'Admissions, challans, board exams, payroll & AI Lite',
     features: [
       'students', 'teachers', 'subjects', 'attendance',
       'timetable', 'notices', 'exams', 'results',
@@ -38,17 +34,15 @@ const plans = [
       'entry-system', 'fees', 'analytics', 'reports',
       'employees', 'visitors', 'canteen', 'advanced'
     ],
-    restrictions: [
-      'No AI implementation'
-    ],
-    limits: { maxStudents: 2000, maxStaff: 200, maxStorage: 5120 },
-    price: { monthly: 5000, yearly: 50000, currency: 'PKR' },
-    isAI: false
+    restrictions: [],
+    limits: { maxStudents: 750, maxStaff: 60, maxStorageGb: 25 },
+    price: { monthly: PLAN_PRICING.standard.monthly, yearly: PLAN_PRICING.standard.yearly, currency: 'PKR' },
+    isAI: true
   },
   {
     planId: 'premium',
-    name: 'Premium AI Plan',
-    description: 'Full-featured platform with AI-powered tools for modern education',
+    name: 'Premium Plan',
+    description: 'Full multi-campus governance, 40M AI & API access',
     features: [
       'students', 'teachers', 'subjects', 'attendance',
       'timetable', 'notices', 'exams', 'results',
@@ -62,8 +56,8 @@ const plans = [
       'ai-syllabus-generator', 'ai-mcq-generator'
     ],
     restrictions: [],
-    limits: { maxStudents: -1, maxStaff: -1, maxStorage: 20480 },
-    price: { monthly: 15000, yearly: 150000, currency: 'PKR' },
+    limits: { maxStudents: 2000, maxStaff: 150, maxStorageGb: Math.round((100 * GB) / GB) },
+    price: { monthly: PLAN_PRICING.premium.monthly, yearly: PLAN_PRICING.premium.yearly, currency: 'PKR' },
     isAI: true
   }
 ];
@@ -71,7 +65,12 @@ const plans = [
 const seedPlans = async () => {
   try {
     const prisma = getSystemClient();
-    console.log('🌱 Seeding subscription plans...');
+    console.log('🌱 Seeding fixed 3 subscription plans (Starter, Standard, Premium)...');
+
+    // Remove any deprecated/legacy plan rows outside the 3 fixed plans
+    await prisma.subscription.deleteMany({
+      where: { planId: { notIn: ['starter', 'standard', 'premium'] } }
+    });
 
     // Upsert each plan
     for (const plan of plans) {

@@ -25,25 +25,34 @@ const VALID_STATUSES = ['new', 'contacted', 'approved', 'rejected'];
 
 exports.getSubscriptionPlans = async (req, res, next) => {
   try {
-    const threePlan = isThreePlanMode();
     const prisma = getSystemClient();
-    const dbPlans = await prisma.subscription.findMany({
-      where: {
-        isActive: true,
-        planId: { in: CANONICAL_PLANS }
-      }
-    });
+    const [dbPlans, planVersions] = await Promise.all([
+      prisma.subscription.findMany({
+        where: {
+          isActive: true,
+          planId: { in: CANONICAL_PLANS }
+        }
+      }),
+      prisma.planVersion?.findMany
+        ? prisma.planVersion.findMany({
+            where: { planId: { in: CANONICAL_PLANS } },
+            orderBy: { version: 'desc' }
+          }).catch(() => [])
+        : []
+    ]);
+
+    const latestVersionByPlan = new Map();
+    for (const pv of planVersions || []) {
+      if (!latestVersionByPlan.has(pv.planId)) latestVersionByPlan.set(pv.planId, pv);
+    }
 
     const formattedPlans = CANONICAL_PLANS.map(planId => {
       const dbRow = dbPlans.find(p => p.planId === planId);
+      const pv = latestVersionByPlan.get(planId);
       const canonicalPrice = PLAN_PRICING[planId] || { monthly: 0, yearly: 0 };
-      const canonicalLimits = PLAN_LIMITS[planId] || {};
-      const monthlyPrice = threePlan
-        ? canonicalPrice.monthly
-        : (dbRow?.priceMonthlyPkr ?? dbRow?.price?.monthly ?? canonicalPrice.monthly);
-      const yearlyPrice = threePlan
-        ? canonicalPrice.yearly
-        : (dbRow?.priceYearlyPkr ?? dbRow?.price?.yearly ?? canonicalPrice.yearly);
+      const canonicalLimits = { ...(PLAN_LIMITS[planId] || {}), ...(pv?.limitsJson || {}) };
+      const monthlyPrice = pv?.pricesJson?.monthlyPkr ?? dbRow?.price?.monthly ?? canonicalPrice.monthly;
+      const yearlyPrice = pv?.pricesJson?.yearlyPkr ?? dbRow?.price?.yearly ?? canonicalPrice.yearly;
       return {
         ...(dbRow || {}),
         planId,
@@ -59,36 +68,21 @@ exports.getSubscriptionPlans = async (req, res, next) => {
       };
     });
 
-    let addons = [];
-    if (threePlan) {
-      addons = ADDON_CATALOG_SEEDS;
-    } else {
-      addons = await prisma.addonCatalog.findMany({
-        where: { isAvailable: true },
-        orderBy: [{ addonType: 'asc' }, { planId: 'asc' }]
-      });
-    }
+    const addons = ADDON_CATALOG_SEEDS;
 
-    const counts = threePlan
-      ? {
-          starter: 33,
-          standard: 88,
-          premium: 153,
-          addonOnly: 9,
-          total: 162,
-          live: { starter: 26, standard: 70, premium: 86 }
-        }
-      : {
-          starter: 33,
-          standard: 88,
-          premium: 141,
-          enterprise: 162
-        };
+    const counts = {
+      starter: 33,
+      standard: 88,
+      premium: 153,
+      addonOnly: 9,
+      total: 162,
+      live: { starter: 26, standard: 70, premium: 86 }
+    };
 
     res.json({
       success: true,
       data: {
-        threePlanMode: threePlan,
+        threePlanMode: true,
         plans: formattedPlans,
         addons,
         counts
