@@ -182,30 +182,23 @@ const wrapHtml = (body) => `
 </html>`;
 
 // ── Invitation Email ───────────────────────────────────────────────────
-const buildInvitationHtml = ({ inviteUrl, planId, expiresAt }) => {
-  const plan = PLAN_STYLES[planId?.toLowerCase()] || PLAN_STYLES.basic;
+const buildInvitationHtml = ({ inviteUrl, expiresAt }) => {
   const expiryStr = expiresAt
-    ? new Date(expiresAt).toLocaleString('en-US', {
+    ? new Date(expiresAt).toLocaleString('en-PK', {
+        timeZone: 'Asia/Karachi',
         weekday: 'short', month: 'short', day: 'numeric',
-        year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
-      })
+        year: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) + ' PKT'
     : '48 hours from now';
 
   return wrapHtml(`
     <h1 style="color:#f1f5f9;font-size:22px;font-weight:800;margin:0 0 8px;">
-      You're invited to join Academix 🎉
+      You're invited to join CollegesHub 🎉
     </h1>
     <p style="color:#64748b;font-size:14px;line-height:1.6;margin:0 0 28px;">
-      Your institution has been invited to the <strong style="color:#94a3b8;">Academix</strong> education management platform.
-      Click the button below to accept your invitation and set up your college workspace.
+      Your institution has been invited to the <strong style="color:#94a3b8;">CollegesHub</strong> education management platform.
+      Click the button below to accept your invitation and start your 14-day free trial.
     </p>
-
-    <!-- Plan Badge -->
-    <div style="margin-bottom:28px;">
-      <span style="display:inline-block;padding:6px 16px;border-radius:99px;background:${plan.bg};color:${plan.color};font-size:12px;font-weight:700;border:1px solid ${plan.color}33;letter-spacing:0.5px;">
-        ${plan.label} Plan
-      </span>
-    </div>
 
     <!-- Expiry Notice -->
     <div style="background:#0f1923;border:1px solid rgba(245,158,11,0.15);border-radius:12px;padding:14px 18px;margin-bottom:32px;display:flex;align-items:center;gap:10px;">
@@ -286,19 +279,18 @@ const buildPasswordResetHtml = ({ name, code }) => wrapHtml(`
  * Send a college invitation email.
  * Throws a sanitized Error if delivery fails (caller should catch and return 500).
  */
-const sendInvitationEmail = async (to, { inviteUrl, planId, expiresAt }) => {
+const sendInvitationEmail = async (to, { inviteUrl, expiresAt }) => {
   const transporter = createTransporter();
-  const html = buildInvitationHtml({ inviteUrl, planId, expiresAt });
+  const html = buildInvitationHtml({ inviteUrl, expiresAt });
 
   try {
     await transporter.sendMail({
       from: fromAddress(),
       to,
-      subject: '🎓 You\'re invited to join Academix — Accept your invitation',
+      subject: '🎓 You\'re invited to join CollegesHub — Accept your invitation',
       html,
       text: [
-        'You have been invited to join Academix Education Management Platform.',
-        `Plan: ${planId || 'Basic'}`,
+        'You have been invited to join CollegesHub Education Management Platform (14-day free trial included).',
         `Accept your invitation here: ${inviteUrl}`,
         `This link expires: ${expiresAt ? new Date(expiresAt).toUTCString() : 'in 48 hours'}`,
         '',

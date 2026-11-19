@@ -5,9 +5,30 @@
 
 const { approvePayment, rejectPayment } = require('../services/settlementService');
 const { getSystemClient } = require('../config/prismaManager');
+const {
+  getBillingOverview,
+  getInvoiceBillingDetail,
+  approveBillingInvoice,
+  denyBillingInvoice,
+  manualToggleCollegeSubscription,
+  getCollegeBillingHistory,
+  getBillingAuditLogs,
+} = require('../services/superAdminBillingService');
 
 function getPrisma() {
   return getSystemClient();
+}
+
+function assertSuperAdmin(req, res) {
+  if (!req.user || req.user.role !== 'superAdmin') {
+    res.status(403).json({
+      success: false,
+      code: 'FORBIDDEN',
+      message: 'Super Admin access is required for billing operations.',
+    });
+    return false;
+  }
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +195,177 @@ async function verifyReceipt(req, res) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Unified Accounts / Billing Handlers (PlatformInvoice + CollegeSubscription)
+// ---------------------------------------------------------------------------
+
+async function getBillingOverviewHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const { status, invoiceStatus, planId, search, page, limit } = req.query;
+    const data = await getBillingOverview(prisma, { status, invoiceStatus, planId, search, page, limit });
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    console.error('[billing] getBillingOverviewHandler error:', err);
+    return res.status(500).json({ success: false, message: err.message || 'Failed to load billing overview.' });
+  }
+}
+
+async function getInvoiceDetailHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const data = await getInvoiceBillingDetail(prisma, req.params.invoiceId);
+    let proofUrl = null;
+    if (data.invoice?.proofObjectKey) {
+      const { getPresignedDownloadUrl } = require('../services/storageService');
+      proofUrl = await getPresignedDownloadUrl({ objectKey: data.invoice.proofObjectKey, expiresIn: 900 }).catch(() => null);
+    }
+    return res.status(200).json({ success: true, data: { ...data, proofUrl } });
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, code: err.code, message: err.message });
+  }
+}
+
+async function getInvoiceProofUrlHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const invoice = await prisma.platformInvoice.findUnique({ where: { id: req.params.invoiceId } });
+    if (!invoice || !invoice.proofObjectKey) {
+      return res.status(404).json({ success: false, message: 'No uploaded proof found for this invoice.' });
+    }
+    const { getPresignedDownloadUrl } = require('../services/storageService');
+    const url = await getPresignedDownloadUrl({ objectKey: invoice.proofObjectKey, expiresIn: 900 });
+    return res.status(200).json({
+      success: true,
+      url,
+      mimeType: invoice.proofMimeType || null,
+      expiresIn: 900,
+    });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Failed to generate proof URL.' });
+  }
+}
+
+async function approveInvoiceHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const result = await approveBillingInvoice(prisma, {
+      invoiceId: req.params.invoiceId,
+      adminUserId: req.user.id,
+      adminEmail: req.user.email || null,
+      note: req.body?.note || null,
+      ipAddress: req.ip || null,
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Invoice ${result.invoice.invoiceNo} approved and subscription activated.`,
+      data: result,
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, code: err.code, message: err.message });
+  }
+}
+
+async function denyInvoiceHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const result = await denyBillingInvoice(prisma, {
+      invoiceId: req.params.invoiceId,
+      adminUserId: req.user.id,
+      adminEmail: req.user.email || null,
+      reason: req.body?.reason,
+      ipAddress: req.ip || null,
+    });
+    return res.status(200).json({
+      success: true,
+      message: `Invoice ${result.invoice.invoiceNo} marked REJECTED.`,
+      data: result,
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, code: err.code, message: err.message });
+  }
+}
+
+async function activateCollegeSubscriptionHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const { reason, planId, billingCycle } = req.body || {};
+    const result = await manualToggleCollegeSubscription(prisma, {
+      collegeId: req.params.collegeId,
+      action: 'ACTIVATE',
+      reason,
+      planId,
+      billingCycle,
+      adminUserId: req.user.id,
+      adminEmail: req.user.email || null,
+      ipAddress: req.ip || null,
+    });
+    return res.status(200).json({
+      success: true,
+      message: 'College subscription manually activated.',
+      data: result,
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, code: err.code, message: err.message });
+  }
+}
+
+async function deactivateCollegeSubscriptionHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const { reason } = req.body || {};
+    const result = await manualToggleCollegeSubscription(prisma, {
+      collegeId: req.params.collegeId,
+      action: 'DEACTIVATE',
+      reason,
+      adminUserId: req.user.id,
+      adminEmail: adminEmailOrNull(req),
+      ipAddress: req.ip || null,
+    });
+    return res.status(200).json({
+      success: true,
+      message: 'College subscription manually deactivated.',
+      data: result,
+    });
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, code: err.code, message: err.message });
+  }
+}
+
+function adminEmailOrNull(req) {
+  return req.user?.email || null;
+}
+
+async function getCollegeBillingHistoryHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const data = await getCollegeBillingHistory(prisma, req.params.collegeId);
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    return res.status(err.status || 500).json({ success: false, code: err.code, message: err.message });
+  }
+}
+
+async function getBillingAuditLogsHandler(req, res) {
+  if (!assertSuperAdmin(req, res)) return;
+  try {
+    const prisma = getPrisma();
+    const { collegeId, action, page, limit } = req.query;
+    const data = await getBillingAuditLogs(prisma, { collegeId, action, page, limit });
+    return res.status(200).json({ success: true, data });
+  } catch (err) {
+    return res.status(500).json({ success: false, message: err.message || 'Failed to fetch billing audit logs.' });
+  }
+}
+
 module.exports = {
   getPendingPayments,
   getAllPayments,
@@ -181,5 +373,14 @@ module.exports = {
   rejectPaymentHandler,
   getReceiptUrl,
   verifyReceipt,
+  getBillingOverviewHandler,
+  getInvoiceDetailHandler,
+  getInvoiceProofUrlHandler,
+  approveInvoiceHandler,
+  denyInvoiceHandler,
+  activateCollegeSubscriptionHandler,
+  deactivateCollegeSubscriptionHandler,
+  getCollegeBillingHistoryHandler,
+  getBillingAuditLogsHandler,
 };
 

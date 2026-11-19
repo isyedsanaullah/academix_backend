@@ -7,6 +7,8 @@ const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
 const { resolveCollegeFeatures } = require('../config/featureRegistry');
 const { isThreePlanMode } = require('../config/featureFlags');
 const { getEntitlements } = require('../middleware/loadEntitlements');
+const { computeSubscriptionSnapshot } = require('../services/subscriptionStateService');
+const { INACTIVE_COLLEGE_MESSAGE } = require('../middleware/subscriptionAccessLock');
 const mailService = require('../services/mailService');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -18,6 +20,63 @@ const {
   recordFailedPasswordAttempt,
   clearFailedPasswordAttempt
 } = require('./twoFactor.controller');
+
+const COLLEGE_AUTH_SELECT = {
+  id: true,
+  name: true,
+  code: true,
+  slug: true,
+  status: true,
+  logo: true,
+  isActive: true,
+  subscription: true,
+  settings: true,
+  createdAt: true,
+  onboarding_state: true,
+  subscription_status: true,
+  grace_until: true,
+  subStatus: true,
+  trialStartedAt: true,
+  trialEndsAt: true,
+  periodStart: true,
+  periodEnd: true,
+  forceReadOnly: true,
+  readOnlyReason: true,
+  tokenEpoch: true
+};
+
+function enrichCollegeSubscriptionForAuth(college, userRole) {
+  if (!college) return { blocked: null, college: null };
+  const snapshot = computeSubscriptionSnapshot(college);
+  if (snapshot.isLocked && userRole !== 'admin' && userRole !== 'superAdmin') {
+    return {
+      blocked: {
+        status: 403,
+        payload: {
+          success: false,
+          code: 'SUBSCRIPTION_INACTIVE',
+          lockReason: snapshot.lockReason,
+          message: INACTIVE_COLLEGE_MESSAGE
+        }
+      },
+      college: null
+    };
+  }
+  college._id = college.id;
+  college.subStatus = snapshot.effectiveSubStatus;
+  college.effectiveSubStatus = snapshot.effectiveSubStatus;
+  college.daysRemaining = snapshot.daysRemaining;
+  college.trialStartedAt = snapshot.trialStartedAt;
+  college.trialEndsAt = snapshot.trialEndsAt;
+  college.periodStart = snapshot.periodStart;
+  college.periodEnd = snapshot.periodEnd;
+  college.isLocked = snapshot.isLocked;
+  college.lockReason = snapshot.lockReason;
+  if (snapshot.isLocked) {
+    college.subscriptionSuspended = true;
+  }
+  return { blocked: null, college };
+}
 
 // In-memory rate limiting for step-up auth (5 failures -> 15 min lockout)
 const stepUpAttempts = new Map();
@@ -241,38 +300,19 @@ exports.login = async (req, res, next) => {
     if (user.college_id) {
       college = await prisma.college.findUnique({
         where: { id: user.college_id },
-        select: {
-          id: true, name: true, code: true, slug: true, status: true, logo: true,
-          subscription: true, settings: true, createdAt: true, onboarding_state: true,
-          subscription_status: true, grace_until: true, subStatus: true, tokenEpoch: true
-        }
+        select: COLLEGE_AUTH_SELECT
       });
       if (college) {
-        if (college.subStatus === 'SUSPENDED') {
-          return res.status(403).json({
-            success: false,
-            code: 'ACCOUNT_SUSPENDED',
-            message: 'This institution account is currently suspended.'
-          });
-        }
         if (college.status === 'onboarding' && user.role !== 'admin') {
           return res.status(403).json({ success: false, message: 'College setup is not finished yet.' });
         }
         if (college.status === 'pending_setup' && user.role !== 'superAdmin') {
           return res.status(403).json({ success: false, message: 'College setup is not finished yet.' });
         }
-        const isSuspended = college.status === 'suspended' || college.subscription_status === 'suspended';
-        if (isSuspended) {
-          if (user.role !== 'admin' && user.role !== 'superAdmin') {
-            return res.status(403).json({
-              success: false,
-              code: 'SUBSCRIPTION_SUSPENDED',
-              message: "This college's subscription has expired. Please contact your college administration."
-            });
-          }
-          college.subscriptionSuspended = true;
+        const subCheck = enrichCollegeSubscriptionForAuth(college, user.role);
+        if (subCheck.blocked) {
+          return res.status(subCheck.blocked.status).json(subCheck.blocked.payload);
         }
-        college._id = college.id;
         const ent = await getEntitlements(user.college_id);
         college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
@@ -409,11 +449,7 @@ exports.googleLogin = async (req, res, next) => {
     if (updatedUser.college_id) {
       college = await prisma.college.findUnique({
         where: { id: updatedUser.college_id },
-        select: {
-          id: true, name: true, code: true, slug: true, status: true, logo: true,
-          subscription: true, settings: true, createdAt: true, onboarding_state: true,
-          subscription_status: true, grace_until: true, subStatus: true, tokenEpoch: true
-        }
+        select: COLLEGE_AUTH_SELECT
       });
       if (college) {
         if (college.status === 'onboarding' && updatedUser.role !== 'admin') {
@@ -422,18 +458,10 @@ exports.googleLogin = async (req, res, next) => {
         if (college.status === 'pending_setup' && updatedUser.role !== 'superAdmin') {
           return res.status(403).json({ success: false, message: 'College setup is not finished yet.' });
         }
-        const isSuspended = college.status === 'suspended' || college.subscription_status === 'suspended';
-        if (isSuspended) {
-          if (updatedUser.role !== 'admin' && updatedUser.role !== 'superAdmin') {
-            return res.status(403).json({
-              success: false,
-              code: 'SUBSCRIPTION_SUSPENDED',
-              message: "This college's subscription has expired. Please contact your college administration."
-            });
-          }
-          college.subscriptionSuspended = true;
+        const subCheck = enrichCollegeSubscriptionForAuth(college, updatedUser.role);
+        if (subCheck.blocked) {
+          return res.status(subCheck.blocked.status).json(subCheck.blocked.payload);
         }
-        college._id = college.id;
         const ent = await getEntitlements(updatedUser.college_id);
         college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }
@@ -517,25 +545,13 @@ exports.getMe = async (req, res, next) => {
     if (user.college_id) {
       college = await prisma.college.findUnique({
         where: { id: user.college_id },
-        select: {
-          id: true, name: true, code: true, slug: true, status: true, logo: true,
-          subscription: true, settings: true, onboarding_state: true,
-          subscription_status: true, grace_until: true
-        }
+        select: COLLEGE_AUTH_SELECT
       });
       if (college) {
-        const isSuspended = college.status === 'suspended' || college.subscription_status === 'suspended';
-        if (isSuspended) {
-          if (user.role !== 'admin' && user.role !== 'superAdmin') {
-            return res.status(403).json({
-              success: false,
-              code: 'SUBSCRIPTION_SUSPENDED',
-              message: "This college's subscription has expired. Please contact your college administration."
-            });
-          }
-          college.subscriptionSuspended = true;
+        const subCheck = enrichCollegeSubscriptionForAuth(college, user.role);
+        if (subCheck.blocked) {
+          return res.status(subCheck.blocked.status).json(subCheck.blocked.payload);
         }
-        college._id = college.id;
         const ent = await getEntitlements(user.college_id);
         college.effectiveFeatures = ent.active ? ent.effectiveFeatures : [];
       }

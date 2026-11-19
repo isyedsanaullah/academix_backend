@@ -14,6 +14,7 @@ const { generateFeeVoucherPDF } = require('./feeVoucher');
 const { generatePaidReceiptPDF } = require('./paidReceipt');
 const { generateStudentCardPDF, CR80_WIDTH, CR80_HEIGHT } = require('./studentCard');
 const { generatePlatformInvoicePDF, PLATFORM_BRANDING } = require('./platformInvoice');
+const { generateSubscriptionVoucherPDF } = require('./subscriptionVoucher');
 const shared = require('./shared');
 
 module.exports = {
@@ -22,6 +23,7 @@ module.exports = {
   generatePaidReceiptPDF,
   generateStudentCardPDF,
   generatePlatformInvoicePDF,
+  generateSubscriptionVoucherPDF,
   CERTIFICATE_TITLES,
   PLATFORM_BRANDING,
   CR80_WIDTH,

@@ -560,8 +560,10 @@ model College {
   feature_overrides    Json?                @default("{}")
   planId               String               @default("starter")
   billingCycle         String               @default("MONTHLY") // MONTHLY, YEARLY
-  subStatus            String               @default("TRIAL") // TRIAL, ACTIVE, SUSPENDED
+  subStatus            String               @default("TRIAL") // TRIAL, PENDING_PAYMENT, ACTIVE, EXPIRED, DEACTIVATED
+  trialStartedAt       DateTime?
   trialEndsAt          DateTime?
+  activeSubscriptionId String?
   periodStart          DateTime?
   periodEnd            DateTime?
   annualQuotaCycleStart DateTime?           @default(now())
@@ -599,6 +601,8 @@ model College {
   isTest                   Boolean  @default(false)
 
   @@index([status])
+  @@index([subStatus, trialEndsAt])
+  @@index([subStatus, periodEnd])
   @@index([subscription(path: "status")])
   @@index([planId, subStatus])
   @@index([isTest])
@@ -666,23 +670,24 @@ model MessageDelivery {
 }
 
 model CollegeInvitation {
-  id         String    @id @default(uuid())
-  email      String
-  planId     String
-  token      String    @unique
-  status     String    @default("pending") // pending, accepted, expired, cancelled
-  invitedBy  String
-  expiresAt  DateTime
-  acceptedAt DateTime?
-  collegeId  String?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id                 String    @id @default(uuid())
+  email              String
+  collegeName        String?
+  tokenHash          String    @unique
+  status             String    @default("pending") // pending, accepted, expired, cancelled
+  invitedBy          String
+  expiresAt          DateTime
+  acceptedAt         DateTime?
+  renewalRequestedAt DateTime?
+  collegeId          String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([email])
   @@index([status])
   @@index([status, expiresAt])
   @@index([createdAt(sort: Desc)])
-  @@index([token])
+  @@index([tokenHash])
 }
 
 
@@ -1038,26 +1043,94 @@ model TimetableDraft {                 // generated draft before applying to liv
   @@index([college_id, session_id, status])
 }
 
-model PlatformInvoice {
-  id            String    @id @default(uuid())
-  college_id    String
-  invoiceNo     String    @unique
-  planId        String?
-  periodStart   DateTime
-  periodEnd     DateTime
-  amount        Decimal   @db.Decimal(12, 2)
-  status        String?   @default("unpaid") // unpaid, paid, void
-  paidAt        DateTime?
-  method        String?                // bank, easypaisa, jazzcash, cash
-  reference     String?
-  proof_file_id String?                // StoredFile.id of the college's payment screenshot
-  verifyToken   String    @unique      // random, used by the public verify page
-  verifiedBy    String?
-  createdAt     DateTime  @default(now())
-  updatedAt     DateTime  @updatedAt
+model CollegeSubscription {
+  id                 String    @id @default(uuid())
+  college_id         String
+  status             String    @default("PENDING_PAYMENT") // TRIAL, PENDING_PAYMENT, ACTIVE, EXPIRED, DEACTIVATED, SUPERSEDED
+  planId             String
+  planName           String
+  planPricePkr       Int
+  addonsSnapshot     Json      @default("[]") // [{ addonType, name, unitPricePkr, quantity, subtotalPkr }]
+  subtotalPkr        Int
+  prorationCreditPkr Int       @default(0)
+  totalPkr           Int
+  currency           String    @default("PKR")
+  billingCycle       String    @default("MONTHLY") // MONTHLY, YEARLY
+  startsAt           DateTime?
+  endsAt             DateTime?
+  trialStartedAt     DateTime?
+  trialEndsAt        DateTime?
+  activatedAt        DateTime?
+  deactivatedAt      DateTime?
+  deactivatedReason  String?
+  createdBy          String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([college_id, status])
+  @@index([college_id, createdAt(sort: Desc)])
+  @@index([endsAt])
+}
+
+model PlatformInvoice {
+  id                  String    @id @default(uuid())
+  college_id          String
+  subscriptionId      String?
+  invoiceNo           String    @unique
+  planId              String?
+  billingCycle        String?   @default("MONTHLY")
+  purpose             String?
+  lineItems           Json?     @default("[]")
+  currency            String    @default("PKR")
+  bankDetailsSnapshot Json?
+  periodStart         DateTime
+  periodEnd           DateTime
+  dueDate             DateTime?
+  amount              Decimal   @db.Decimal(12, 2)
+  status              String    @default("UNPAID") // UNPAID, PENDING_REVIEW, APPROVED, REJECTED, VOID
+  paidAt              DateTime?
+  method              String?
+  reference           String?
+  proof_file_id       String?
+  proofObjectKey      String?
+  proofMimeType       String?
+  proofSizeBytes      Int?
+  referenceNumber     String?
+  submissionNote      String?
+  rejectionReason     String?
+  submittedAt         DateTime?
+  submittedBy         String?
+  reviewedAt          DateTime?
+  reviewedBy          String?
+  verifyToken         String    @unique
+  verifiedBy          String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([college_id, status])
+  @@index([status, createdAt(sort: Desc)])
+  @@index([subscriptionId])
   @@index([createdAt(sort: Desc)])
+}
+
+model InvoiceProofSubmission {
+  id              String    @id @default(uuid())
+  invoiceId       String
+  college_id      String
+  objectKey       String
+  mimeType        String
+  sizeBytes       Int
+  referenceNumber String?
+  note            String?
+  status          String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED
+  rejectionReason String?
+  submittedBy     String
+  reviewedBy      String?
+  reviewedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  @@index([invoiceId, createdAt(sort: Desc)])
+  @@index([college_id, status])
 }
 
 model VerifyToken {

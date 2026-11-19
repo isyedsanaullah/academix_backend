@@ -6,7 +6,12 @@
  */
 require('dotenv').config();
 
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { getSystemClient, closeAllClients } = require('../config/prismaManager');
+const { PLAN_PRICING } = require('../config/planConstants');
+const { TRIAL_DAYS, TRIAL_ENTITLEMENT_PLAN } = require('../config/trialConfig');
+const { BANK_DETAILS } = require('../config/billingConfig');
 const data = require('./seedData');
 
 const args  = process.argv.slice(2);
@@ -16,14 +21,20 @@ const WIPE  = args.includes('--wipe');
 async function clearDB(prisma) {
   console.log('🗑  Clearing all tables sequentially...');
   const models = [
-    'admissionSeason', 'aIApiKey', 'aIUsageLog', 'announcement', 'application', 
-    'approval', 'assignment', 'attendance', 'auditLog', 'canteenTransaction', 
-    'certificate', 'chatHistory', 'class', 'college', 'earlyExitRequest', 
-    'employee', 'evaluationSeason', 'evaluation', 'exam', 'fee', 
-    'fine', 'gateLog', 'leaveApplication', 'notification', 'payment', 
-    'paySlip', 'pDFDocument', 'quiz', 'result', 'section', 
-    'session', 'student', 'studentFee', 'subject', 'subscription', 
-    'teacher', 'timetable', 'transaction', 'user', 'visitorLog', 'documentChunk'
+    'invoiceProofSubmission', 'platformInvoice', 'collegeSubscription',
+    'collegeEntitlementAudit', 'collegeInvitation', 'collegeInvite',
+    'collegeAddon', 'collegeSubscriptionPayment', 'collegeQuotaOverride',
+    'collegeFeatureOverride', 'collegeCreditBalance', 'collegeUsage',
+    'subscriptionPeriod', 'verifyToken', 'verifyLog', 'outboxEvent',
+    'admissionSeason', 'aIApiKey', 'aIUsageLog', 'announcement', 'application',
+    'approval', 'assignment', 'attendance', 'auditLog', 'canteenTransaction',
+    'certificate', 'chatHistory', 'class', 'earlyExitRequest',
+    'employee', 'evaluationSeason', 'evaluation', 'exam', 'fee',
+    'fine', 'gateLog', 'leaveApplication', 'notification', 'payment',
+    'paySlip', 'pDFDocument', 'quiz', 'result', 'section',
+    'session', 'student', 'studentFee', 'subject', 'subscription',
+    'teacher', 'timetable', 'transaction', 'user', 'visitorLog', 'documentChunk',
+    'college'
   ];
 
   for (const modelName of models) {
@@ -40,32 +51,27 @@ async function seed(prisma) {
   try {
     console.log('\n📦  Inserting seed data...\n');
 
-    // 1. Subscription Plans
+    // 1. Subscription Plans (canonical PKRs from planConstants)
     const plans = [
       {
-        planId: 'basic',
-        name: 'Basic Plan',
-        description: 'Essential college management features for small institutions',
+        planId: 'starter',
+        name: 'Starter Plan',
+        description: 'Core daily operations for smaller institutions',
         features: [
           'students', 'teachers', 'subjects', 'attendance',
           'timetable', 'notices', 'exams', 'results',
           'classes', 'sections', 'sessions', 'announcements',
           'assignments', 'quizzes', 'certificates'
         ],
-        restrictions: [
-          'No AI features',
-          'No biometric/entry system',
-          'No fee management',
-          'Teacher attendance only'
-        ],
-        limits: { maxStudents: 500, maxStaff: 50, maxStorage: 1024 },
-        price: { monthly: 0, yearly: 0, currency: 'PKR' },
+        restrictions: ['No AI features', 'No fee management'],
+        limits: { maxStudents: 350, maxStaff: 35, maxStorageGb: 5 },
+        price: { monthly: PLAN_PRICING.starter.monthly, yearly: PLAN_PRICING.starter.yearly, currency: 'PKR' },
         isAI: false
       },
       {
         planId: 'standard',
         name: 'Standard Plan',
-        description: 'Advanced management with fee tracking, analytics, and entry system',
+        description: 'Admissions, challans, board exams, payroll & AI Lite',
         features: [
           'students', 'teachers', 'subjects', 'attendance',
           'timetable', 'notices', 'exams', 'results',
@@ -74,17 +80,15 @@ async function seed(prisma) {
           'entry-system', 'fees', 'analytics', 'reports',
           'employees', 'visitors', 'canteen', 'advanced'
         ],
-        restrictions: [
-          'No AI implementation'
-        ],
-        limits: { maxStudents: 2000, maxStaff: 200, maxStorage: 5120 },
-        price: { monthly: 5000, yearly: 50000, currency: 'PKR' },
-        isAI: false
+        restrictions: [],
+        limits: { maxStudents: 1500, maxStaff: 120, maxStorageGb: 25 },
+        price: { monthly: PLAN_PRICING.standard.monthly, yearly: PLAN_PRICING.standard.yearly, currency: 'PKR' },
+        isAI: true
       },
       {
         planId: 'premium',
-        name: 'Premium AI Plan',
-        description: 'Full-featured platform with AI-powered tools for modern education',
+        name: 'Premium Plan',
+        description: 'Full-featured multi-campus platform with AI & parent portal',
         features: [
           'students', 'teachers', 'subjects', 'attendance',
           'timetable', 'notices', 'exams', 'results',
@@ -98,8 +102,8 @@ async function seed(prisma) {
           'ai-syllabus-generator', 'ai-mcq-generator'
         ],
         restrictions: [],
-        limits: { maxStudents: -1, maxStaff: -1, maxStorage: 20480 },
-        price: { monthly: 15000, yearly: 150000, currency: 'PKR' },
+        limits: { maxStudents: 5000, maxStaff: 400, maxStorageGb: 100 },
+        price: { monthly: PLAN_PRICING.premium.monthly, yearly: PLAN_PRICING.premium.yearly, currency: 'PKR' },
         isAI: true
       }
     ];
@@ -109,26 +113,38 @@ async function seed(prisma) {
     }
     console.log(`   ✔  Subscription Plans → ${plans.length}`);
 
-    // 2. Colleges
-    const collegesMapped = data.colleges.map(c => ({
-      id: c._id,
-      name: c.name,
-      code: c.code,
-      mongoUrl: c.mongoUrl,
-      email: c.email,
-      phone: c.phone,
-      address: c.address,
-      city: c.city,
-      logo: c.logo,
-      website: c.website,
-      subscription: c.subscription,
-      settings: c.settings || {},
-      createdAt: c.createdAt,
-    }));
+    // 2. Colleges (including PCS=ACTIVE, FMC=TRIAL + LGC=PENDING_PAYMENT, MGC=EXPIRED, KWC=DEACTIVATED)
+    const now = new Date();
+    const dayMs = 86400000;
+    const collegesMapped = data.colleges.map((c, idx) => {
+      const isTrial = idx === 1;
+      return {
+        id: c._id,
+        name: c.name,
+        code: c.code,
+        mongoUrl: c.mongoUrl,
+        email: c.email,
+        phone: c.phone,
+        address: c.address,
+        city: c.city,
+        logo: c.logo,
+        website: c.website,
+        planId: isTrial ? TRIAL_ENTITLEMENT_PLAN : 'premium',
+        billingCycle: isTrial ? 'MONTHLY' : 'YEARLY',
+        subStatus: isTrial ? 'TRIAL' : 'ACTIVE',
+        trialStartedAt: isTrial ? new Date(now.getTime() - 4 * dayMs) : null,
+        trialEndsAt: isTrial ? new Date(now.getTime() + (TRIAL_DAYS - 4) * dayMs) : null,
+        periodStart: isTrial ? null : new Date(now.getTime() - 30 * dayMs),
+        periodEnd: isTrial ? null : new Date(now.getTime() + 335 * dayMs),
+        subscription: c.subscription,
+        settings: c.settings || {},
+        createdAt: c.createdAt,
+      };
+    });
     for (const c of collegesMapped) {
       await prisma.college.create({ data: c });
     }
-    console.log(`   ✔  Colleges      → ${collegesMapped.length}`);
+    console.log(`   ✔  Colleges      → ${collegesMapped.length} base`);
 
     // 3. Users
     const usersMapped = data.users.map(u => ({
@@ -412,18 +428,281 @@ async function seed(prisma) {
     }
     console.log(`   ✔  Assignments   → ${assignmentsMapped.length}`);
 
+    // 16. Subscription Lifecycle States, Locked Subscriptions, Invoices & Planless Invitations
+    const hashPw = (pw) => bcrypt.hashSync(pw, 10);
+    const sha256 = (t) => crypto.createHash('sha256').update(t).digest('hex');
+    const pcsId = collegesMapped[0].id;
+    const fmcId = collegesMapped[1].id;
+    const superAdminUser = usersMapped.find((u) => u.role === 'superAdmin');
+
+    // A) PCS -> Active price-locked subscription + APPROVED invoice
+    const pcsSub = await prisma.collegeSubscription.create({
+      data: {
+        college_id: pcsId,
+        status: 'ACTIVE',
+        planId: 'premium',
+        planName: 'Premium',
+        planPricePkr: PLAN_PRICING.premium.yearly,
+        addonsSnapshot: [],
+        subtotalPkr: PLAN_PRICING.premium.yearly,
+        prorationCreditPkr: 0,
+        totalPkr: PLAN_PRICING.premium.yearly,
+        currency: 'PKR',
+        billingCycle: 'YEARLY',
+        startsAt: new Date(now.getTime() - 30 * dayMs),
+        endsAt: new Date(now.getTime() + 335 * dayMs),
+        activatedAt: new Date(now.getTime() - 30 * dayMs),
+        createdBy: superAdminUser?.id || 'seed',
+      },
+    });
+    await prisma.college.update({
+      where: { id: pcsId },
+      data: { activeSubscriptionId: pcsSub.id },
+    });
+    await prisma.platformInvoice.create({
+      data: {
+        college_id: pcsId,
+        subscriptionId: pcsSub.id,
+        invoiceNo: 'INV-2026-PCS01',
+        planId: 'premium',
+        billingCycle: 'YEARLY',
+        purpose: 'Academix subscription - Premium - Yearly',
+        lineItems: [{ itemType: 'PLAN_SUBSCRIPTION', name: 'Premium Plan (Yearly)', quantity: 1, unitPricePkr: PLAN_PRICING.premium.yearly, subtotalPkr: PLAN_PRICING.premium.yearly, status: 'PAID' }],
+        currency: 'PKR',
+        bankDetailsSnapshot: BANK_DETAILS,
+        periodStart: new Date(now.getTime() - 30 * dayMs),
+        periodEnd: new Date(now.getTime() + 335 * dayMs),
+        dueDate: new Date(now.getTime() - 23 * dayMs),
+        paidAt: new Date(now.getTime() - 30 * dayMs),
+        amount: PLAN_PRICING.premium.yearly,
+        status: 'APPROVED',
+        method: 'bank',
+        referenceNumber: 'UBL-PCS-90011',
+        reviewedAt: new Date(now.getTime() - 30 * dayMs),
+        reviewedBy: superAdminUser?.email || 'superadmin@academix.io',
+        verifyToken: crypto.randomBytes(12).toString('hex'),
+      },
+    });
+
+    // B) FMC (TRIAL) -> Add college admin user
+    await prisma.user.create({
+      data: {
+        name: 'FMC Admin',
+        email: 'admin@fmc.edu.pk',
+        password: hashPw('admin@123'),
+        role: 'admin',
+        college_id: fmcId,
+        isActive: true,
+      },
+    });
+
+    // C) Lahore Grammar Campus -> PENDING_PAYMENT with PENDING_REVIEW invoice
+    const lgc = await prisma.college.create({
+      data: {
+        name: 'Lahore Grammar Campus',
+        code: 'LGC',
+        email: 'admin@lgc.edu.pk',
+        phone: '0302-1112233',
+        city: 'Lahore',
+        planId: 'standard',
+        billingCycle: 'YEARLY',
+        subStatus: 'PENDING_PAYMENT',
+        trialStartedAt: new Date(now.getTime() - 10 * dayMs),
+        trialEndsAt: new Date(now.getTime() + 4 * dayMs),
+      },
+    });
+    await prisma.user.create({
+      data: { name: 'LGC Admin', email: 'admin@lgc.edu.pk', password: hashPw('admin@123'), role: 'admin', college_id: lgc.id, isActive: true },
+    });
+    const lgcSub = await prisma.collegeSubscription.create({
+      data: {
+        college_id: lgc.id,
+        status: 'PENDING_PAYMENT',
+        planId: 'standard',
+        planName: 'Standard',
+        planPricePkr: PLAN_PRICING.standard.yearly,
+        addonsSnapshot: [{ addonType: 'STUDENTS', name: 'Extra Students', quantity: 50, unitPricePkr: 150, subtotalPkr: 7500 }],
+        subtotalPkr: PLAN_PRICING.standard.yearly + 7500,
+        prorationCreditPkr: 0,
+        totalPkr: PLAN_PRICING.standard.yearly + 7500,
+        currency: 'PKR',
+        billingCycle: 'YEARLY',
+      },
+    });
+    const lgcInv = await prisma.platformInvoice.create({
+      data: {
+        college_id: lgc.id,
+        subscriptionId: lgcSub.id,
+        invoiceNo: 'INV-2026-LGC02',
+        planId: 'standard',
+        billingCycle: 'YEARLY',
+        purpose: 'Academix subscription - Standard - Yearly + Extra Students x50',
+        lineItems: [
+          { itemType: 'PLAN_SUBSCRIPTION', name: 'Standard Plan (Yearly)', quantity: 1, unitPricePkr: PLAN_PRICING.standard.yearly, subtotalPkr: PLAN_PRICING.standard.yearly, status: 'UNPAID' },
+          { itemType: 'ADDON', addonType: 'STUDENTS', name: 'Extra Students', quantity: 50, unitPricePkr: 150, subtotalPkr: 7500, status: 'UNPAID' },
+        ],
+        currency: 'PKR',
+        bankDetailsSnapshot: BANK_DETAILS,
+        periodStart: now,
+        periodEnd: new Date(now.getTime() + 365 * dayMs),
+        dueDate: new Date(now.getTime() + 7 * dayMs),
+        amount: PLAN_PRICING.standard.yearly + 7500,
+        status: 'PENDING_REVIEW',
+        method: 'bank',
+        referenceNumber: 'UBL-TXN-77120',
+        submissionNote: 'Paid via UBL Digital App from Gulberg branch',
+        submittedAt: new Date(now.getTime() - 3600 * 1000),
+        submittedBy: 'admin@lgc.edu.pk',
+        verifyToken: crypto.randomBytes(12).toString('hex'),
+      },
+    });
+    await prisma.invoiceProofSubmission.create({
+      data: {
+        invoiceId: lgcInv.id,
+        college_id: lgc.id,
+        objectKey: 'seed/sample-proof-lgc.png',
+        mimeType: 'image/png',
+        sizeBytes: 12450,
+        referenceNumber: 'UBL-TXN-77120',
+        note: 'Paid via UBL Digital App from Gulberg branch',
+        status: 'PENDING_REVIEW',
+        submittedBy: 'admin@lgc.edu.pk',
+      },
+    });
+
+    // D) Multan Garrison College -> EXPIRED (trial ended) + REJECTED & UNPAID invoices
+    const mgc = await prisma.college.create({
+      data: {
+        name: 'Multan Garrison College',
+        code: 'MGC',
+        email: 'admin@mgc.edu.pk',
+        phone: '0303-4445566',
+        city: 'Multan',
+        planId: TRIAL_ENTITLEMENT_PLAN,
+        billingCycle: 'MONTHLY',
+        subStatus: 'EXPIRED',
+        trialStartedAt: new Date(now.getTime() - 16 * dayMs),
+        trialEndsAt: new Date(now.getTime() - 2 * dayMs),
+        forceReadOnly: true,
+        readOnlyReason: 'TRIAL_EXPIRED',
+      },
+    });
+    await prisma.user.createMany({
+      data: [
+        { name: 'MGC Admin', email: 'admin@mgc.edu.pk', password: hashPw('admin@123'), role: 'admin', college_id: mgc.id, isActive: true },
+        { name: 'MGC Teacher', email: 'teacher@mgc.edu.pk', password: hashPw('teacher@123'), role: 'teacher', college_id: mgc.id, isActive: true },
+      ],
+    });
+    const mgcSub = await prisma.collegeSubscription.create({
+      data: {
+        college_id: mgc.id,
+        status: 'PENDING_PAYMENT',
+        planId: 'starter',
+        planName: 'Starter',
+        planPricePkr: PLAN_PRICING.starter.monthly,
+        addonsSnapshot: [],
+        subtotalPkr: PLAN_PRICING.starter.monthly,
+        prorationCreditPkr: 0,
+        totalPkr: PLAN_PRICING.starter.monthly,
+        currency: 'PKR',
+        billingCycle: 'MONTHLY',
+      },
+    });
+    await prisma.platformInvoice.create({
+      data: {
+        college_id: mgc.id,
+        subscriptionId: mgcSub.id,
+        invoiceNo: 'INV-2026-MGC03',
+        planId: 'starter',
+        billingCycle: 'MONTHLY',
+        purpose: 'Academix subscription - Starter - Monthly',
+        lineItems: [{ itemType: 'PLAN_SUBSCRIPTION', name: 'Starter Plan (Monthly)', quantity: 1, unitPricePkr: PLAN_PRICING.starter.monthly, subtotalPkr: PLAN_PRICING.starter.monthly, status: 'UNPAID' }],
+        currency: 'PKR',
+        bankDetailsSnapshot: BANK_DETAILS,
+        periodStart: now,
+        periodEnd: new Date(now.getTime() + 30 * dayMs),
+        dueDate: new Date(now.getTime() + 5 * dayMs),
+        amount: PLAN_PRICING.starter.monthly,
+        status: 'REJECTED',
+        referenceNumber: 'UBL-BAD-009',
+        rejectionReason: 'Receipt image was blurry; please re-upload clear screenshot.',
+        reviewedAt: new Date(now.getTime() - 7200 * 1000),
+        reviewedBy: superAdminUser?.email || 'superadmin@academix.io',
+        verifyToken: crypto.randomBytes(12).toString('hex'),
+      },
+    });
+
+    // E) Karachi Women College -> DEACTIVATED + Audit log
+    const kwc = await prisma.college.create({
+      data: {
+        name: 'Karachi Women College',
+        code: 'KWC',
+        email: 'admin@kwc.edu.pk',
+        phone: '0304-7778899',
+        city: 'Karachi',
+        planId: 'starter',
+        billingCycle: 'MONTHLY',
+        subStatus: 'DEACTIVATED',
+        forceReadOnly: true,
+        readOnlyReason: 'DEACTIVATED',
+      },
+    });
+    await prisma.user.createMany({
+      data: [
+        { name: 'KWC Admin', email: 'admin@kwc.edu.pk', password: hashPw('admin@123'), role: 'admin', college_id: kwc.id, isActive: true },
+        { name: 'KWC Student', email: 'student@kwc.edu.pk', password: hashPw('student@123'), role: 'student', college_id: kwc.id, isActive: true },
+      ],
+    });
+    await prisma.collegeEntitlementAudit.create({
+      data: {
+        college_id: kwc.id,
+        actorUserId: superAdminUser?.id || 'superAdmin',
+        actorEmail: superAdminUser?.email || 'superadmin@academix.io',
+        action: 'MANUAL_SUBSCRIPTION_DEACTIVATE',
+        beforeStateJson: { subStatus: 'ACTIVE' },
+        afterStateJson: { subStatus: 'DEACTIVATED' },
+        reason: 'Sample deactivated tenant for billing & access-lock testing',
+      },
+    });
+
+    // F) Sample planless invitations
+    await prisma.collegeInvitation.createMany({
+      data: [
+        {
+          email: 'pending.invite@example.edu.pk',
+          collegeName: 'Quetta Science Academy',
+          tokenHash: sha256('seed-valid-invite-token-12345'),
+          status: 'pending',
+          invitedBy: superAdminUser?.id || 'superAdmin',
+          expiresAt: new Date(now.getTime() + 7 * dayMs),
+        },
+        {
+          email: 'expired.invite@example.edu.pk',
+          collegeName: 'Peshawar Heritage College',
+          tokenHash: sha256('seed-expired-invite-token-12345'),
+          status: 'pending',
+          invitedBy: superAdminUser?.id || 'superAdmin',
+          expiresAt: new Date(now.getTime() - 2 * dayMs),
+        },
+      ],
+    });
+    console.log('   ✔  Multi-state Colleges, Invoices & Planless Invitations seeded.');
+
     console.log('\n🎉  Database seeded successfully!\n');
-    console.log('─────────────────────────────────────────────────');
-    console.log('  Login Credentials (Punjab College of Science)');
-    console.log('─────────────────────────────────────────────────');
-    console.log('  Super Admin → superadmin@academix.io / super@123');
-    console.log('  Admin       → admin@pcs.edu.pk      / admin@123');
-    console.log('  Registrar   → registrar@pcs.edu.pk  / registrar@123');
-    console.log('  Accountant  → accounts@pcs.edu.pk   / accounts@123');
-    console.log('  Principal   → principal@pcs.edu.pk  / principal@123');
-    console.log('  Teacher     → nadia@pcs.edu.pk      / teacher@123');
-    console.log('  Employee    → security@pcs.edu.pk   / employee@123');
-    console.log('─────────────────────────────────────────────────\n');
+    console.log('──────────────────────────────────────────────────────────');
+    console.log('  Test Credentials Across All Subscription States');
+    console.log('──────────────────────────────────────────────────────────');
+    console.log('  Super Admin         → superadmin@academix.io / super@123');
+    console.log('  PCS [ACTIVE]        → admin@pcs.edu.pk       / admin@123');
+    console.log('  FMC [TRIAL]         → admin@fmc.edu.pk       / admin@123');
+    console.log('  LGC [PENDING_PAY]   → admin@lgc.edu.pk       / admin@123');
+    console.log('  MGC [EXPIRED Lock]  → admin@mgc.edu.pk       / admin@123');
+    console.log('  MGC Teacher (Lock)  → teacher@mgc.edu.pk     / teacher@123');
+    console.log('  KWC [DEACTIVATED]   → admin@kwc.edu.pk       / admin@123');
+    console.log('  KWC Student (Lock)  → student@kwc.edu.pk     / student@123');
+    console.log('  Valid Invite Token  → seed-valid-invite-token-12345');
+    console.log('  Expired Invite Tok. → seed-expired-invite-token-12345');
+    console.log('──────────────────────────────────────────────────────────\n');
 
   } catch (err) {
     console.error('\n❌  Seeding failed:', err.message);

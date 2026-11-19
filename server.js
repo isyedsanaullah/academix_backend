@@ -12,6 +12,8 @@ const { recoverStuckJobs } = require('./services/queueRecoveryService');
 const { initAnnouncementScheduler } = require('./services/announcementScheduler');
 const { initTrashCleanupScheduler } = require('./services/trashCleanupScheduler');
 const { initFileCleanupScheduler } = require('./services/fileCleanupScheduler');
+const { startSubscriptionLifecycleWorker } = require('./workers/subscriptionLifecycleWorker');
+const { startOutboxWorker } = require('./workers/outboxWorker');
 const errorHandler = require('./middleware/errorHandler');
 const { globalSecurityHeaders } = require('./middleware/securityHeaders');
 
@@ -26,6 +28,10 @@ try {
   initAnnouncementScheduler();
   initTrashCleanupScheduler();
   initFileCleanupScheduler();
+  if (process.env.NODE_ENV !== 'test') {
+    startSubscriptionLifecycleWorker();
+    startOutboxWorker(30000);
+  }
 } catch (err) {
   console.error('❌ Failed to connect to PostgreSQL database on startup:', err.message);
 }

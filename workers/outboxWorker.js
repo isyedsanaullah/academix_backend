@@ -31,6 +31,12 @@ async function dispatch(event) {
     case 'IN_APP_NOTIFICATION':
       await handleInAppNotification(event.payload);
       break;
+    case 'TRIAL_REMINDER_EMAIL':
+      await handleTrialReminderEmail(event.payload);
+      break;
+    case 'TRIAL_EXPIRED_EMAIL':
+      await handleTrialExpiredEmail(event.payload);
+      break;
     case 'ENTITLEMENT_CHANGED':
       console.log('[outbox] ENTITLEMENT_CHANGED:', event.payload);
       break;
@@ -66,6 +72,63 @@ async function handleAIEvent(event) {
 async function handleReceiptEmail(payload) {
   const { paymentId, collegeId, receiptNumber, verifiedAmount } = payload;
   console.log(`[outbox] Receipt email queued: ${receiptNumber} for college ${collegeId}`);
+}
+
+async function handleTrialReminderEmail(payload) {
+  const prisma = getPrisma();
+  const { collegeId, daysRemaining, trialEndsAt } = payload || {};
+  if (!collegeId) return;
+  const college = await prisma.college.findUnique({
+    where: { id: collegeId },
+    select: { id: true, name: true, email: true }
+  });
+  if (!college) return;
+  const admins = await prisma.user.findMany({
+    where: { college_id: collegeId, role: 'admin', isActive: true },
+    select: { email: true }
+  });
+  const recipients = [...new Set([...admins.map(a => a.email), college.email].filter(Boolean))];
+  if (recipients.length === 0) return;
+
+  const { getFrontendBaseUrl } = require('../config/env');
+  const { sendTrialReminderEmail } = require('../services/mailService');
+  const choosePlanUrl = `${getFrontendBaseUrl()}/admin/choose-plan`;
+  for (const to of recipients) {
+    await sendTrialReminderEmail(to, {
+      collegeName: college.name,
+      daysRemaining,
+      trialEndsAt,
+      choosePlanUrl
+    });
+  }
+}
+
+async function handleTrialExpiredEmail(payload) {
+  const prisma = getPrisma();
+  const { collegeId, reason } = payload || {};
+  if (!collegeId) return;
+  const college = await prisma.college.findUnique({
+    where: { id: collegeId },
+    select: { id: true, name: true, email: true }
+  });
+  if (!college) return;
+  const admins = await prisma.user.findMany({
+    where: { college_id: collegeId, role: 'admin', isActive: true },
+    select: { email: true }
+  });
+  const recipients = [...new Set([...admins.map(a => a.email), college.email].filter(Boolean))];
+  if (recipients.length === 0) return;
+
+  const { getFrontendBaseUrl } = require('../config/env');
+  const { sendTrialExpiredEmail } = require('../services/mailService');
+  const renewUrl = `${getFrontendBaseUrl()}/admin/renew`;
+  for (const to of recipients) {
+    await sendTrialExpiredEmail(to, {
+      collegeName: college.name,
+      reason: reason || 'TRIAL_EXPIRED',
+      renewUrl
+    });
+  }
 }
 
 async function handleInAppNotification(payload) {

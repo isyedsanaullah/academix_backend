@@ -12,12 +12,13 @@
  * - Re-pins planVersionId to latest PlanVersion at renewal
  */
 
+const cron = require('node-cron');
 const { getSystemClient } = require('../config/prismaManager');
 const { isThreePlanMode } = require('../config/featureFlags');
 const { getPlanConfig } = require('../config/planConstants');
+const { calculateDaysRemaining } = require('../services/subscriptionStateService');
 
 const ADVISORY_LOCK_ID = 1234567890;
-const DEFAULT_GRACE_PERIOD_DAYS = 5;
 
 function getIneligibleAddonTypesForPlan(targetPlanId, threePlan) {
   if (!threePlan) return [];
@@ -37,7 +38,6 @@ function getPktDateString(d = new Date()) {
 
 async function runLifecycleWorker() {
   const prisma = getSystemClient();
-  const graceDays = parseInt(process.env.SUBSCRIPTION_GRACE_PERIOD_DAYS || String(DEFAULT_GRACE_PERIOD_DAYS), 10);
   const now = new Date();
   const todayDate = new Date(getPktDateString(now));
 
@@ -52,10 +52,10 @@ async function runLifecycleWorker() {
       return { skipped: true, reason: 'LOCK_UNAVAILABLE' };
     }
 
-    // 2. Fetch all active/trial colleges
+    // 2. Fetch all active, trial, or pending-payment colleges
     const colleges = await tx.college.findMany({
       where: {
-        subStatus: { in: ['ACTIVE', 'TRIAL'] }
+        subStatus: { in: ['ACTIVE', 'TRIAL', 'PENDING_PAYMENT'] }
       }
     });
 
@@ -179,40 +179,75 @@ async function runLifecycleWorker() {
       }
 
       // -----------------------------------------------------------------------
-      // B. Trial Expiry Check
+      // B. Trial Expiry & Reminder Check (7, 3, 1 days left + expiry)
       // -----------------------------------------------------------------------
-      if (college.subStatus === 'TRIAL' && college.trialEndsAt) {
+      const hasActivePaidTerm = Boolean(college.periodEnd && new Date(college.periodEnd) > now);
+      if ((college.subStatus === 'TRIAL' || (college.subStatus === 'PENDING_PAYMENT' && !hasActivePaidTerm)) && college.trialEndsAt) {
         const trialEnd = new Date(college.trialEndsAt);
-        const daysToTrialEnd = Math.ceil((trialEnd.getTime() - now.getTime()) / 86400000);
+        const daysToTrialEnd = calculateDaysRemaining(trialEnd, now);
 
-        if (now > trialEnd) {
-          // Transition to Read-Only TRIAL_EXPIRED
-          if (!college.forceReadOnly) {
+        if (now >= trialEnd) {
+          // Flip expired trial directly to EXPIRED (locked) — no grace period
+          if (college.subStatus !== 'EXPIRED' || !college.forceReadOnly) {
             await tx.college.update({
               where: { id: college.id },
               data: {
+                subStatus: 'EXPIRED',
                 forceReadOnly: true,
                 readOnlyReason: 'TRIAL_EXPIRED'
               }
             });
-            recordReminder(college.id, 'EXPIRY_TRANSITION', {
-              collegeId: college.id,
-              type: 'TRIAL_EXPIRED',
-              message: 'Trial has expired. Workspace locked to read-only.'
-            }, trialEnd);
+            if (tx.collegeEntitlementAudit?.create) {
+              await tx.collegeEntitlementAudit.create({
+                data: {
+                  college_id: college.id,
+                  actorUserId: 'LIFECYCLE_WORKER',
+                  action: 'TRIAL_EXPIRED',
+                  beforeStateJson: { subStatus: college.subStatus, forceReadOnly: college.forceReadOnly },
+                  afterStateJson: { subStatus: 'EXPIRED', forceReadOnly: true, readOnlyReason: 'TRIAL_EXPIRED' },
+                  reason: '14-day free trial ended without approved subscription'
+                }
+              });
+            }
+            if (!hasLog(college.id, 'TRIAL_EXPIRED', trialEnd)) {
+              recordReminder(college.id, 'TRIAL_EXPIRED', {
+                collegeId: college.id,
+                type: 'TRIAL_EXPIRED',
+                recipient: 'ADMIN',
+                title: '14-Day Free Trial Ended',
+                message: 'Your 14-day free trial has ended. Choose a plan and upload payment proof to unlock all portals.'
+              }, trialEnd);
+              outboxEventsToCreate.push({
+                eventType: 'TRIAL_EXPIRED_EMAIL',
+                college_id: college.id,
+                payload: { collegeId: college.id, reason: 'TRIAL_EXPIRED' }
+              });
+            }
             readOnlyTransitions++;
           }
         } else {
-          // Trial Warnings: 3d, 1d
-          for (const d of [3, 1]) {
-            if (daysToTrialEnd <= d) {
+          // Trial Warnings at 7, 3, and 1 days left
+          for (const d of [7, 3, 1]) {
+            if (daysToTrialEnd <= d && daysToTrialEnd > 0) {
               const eventType = `TRIAL_${d}D`;
               if (!hasLog(college.id, eventType, trialEnd)) {
                 recordReminder(college.id, eventType, {
                   collegeId: college.id,
                   type: eventType,
+                  recipient: 'ADMIN',
+                  title: `${daysToTrialEnd} day${daysToTrialEnd === 1 ? '' : 's'} left in your free trial`,
+                  message: `Your 14-day CollegesHub free trial ends in ${daysToTrialEnd} day${daysToTrialEnd === 1 ? '' : 's'}. Choose a plan to continue without interruption.`,
                   daysRemaining: daysToTrialEnd
                 }, trialEnd);
+                outboxEventsToCreate.push({
+                  eventType: 'TRIAL_REMINDER_EMAIL',
+                  college_id: college.id,
+                  payload: {
+                    collegeId: college.id,
+                    daysRemaining: daysToTrialEnd,
+                    trialEndsAt: trialEnd.toISOString()
+                  }
+                });
               }
             }
           }
@@ -220,11 +255,11 @@ async function runLifecycleWorker() {
       }
 
       // -----------------------------------------------------------------------
-      // C. Paid Subscription Renewal Reminders & Grace Expiry
+      // C. Paid Subscription Renewal Reminders & Immediate Expiry Lock
       // -----------------------------------------------------------------------
       if (college.subStatus === 'ACTIVE' && college.periodEnd) {
         const periodEnd = new Date(college.periodEnd);
-        const daysToExpiry = Math.ceil((periodEnd.getTime() - now.getTime()) / 86400000);
+        const daysToExpiry = calculateDaysRemaining(periodEnd, now);
 
         // Renewal Reminders: 30, 14, 7, 1 days
         const renewalThresholds = [
@@ -246,21 +281,42 @@ async function runLifecycleWorker() {
           }
         }
 
-        // Expiry Transitions: Grace Period Check (periodEnd + graceDays < now)
-        const graceEnd = new Date(periodEnd.getTime() + graceDays * 86400000);
-        if (now > graceEnd && !college.forceReadOnly) {
+        // Immediate Expiry Transition (no grace period)
+        if (now >= periodEnd) {
           await tx.college.update({
             where: { id: college.id },
             data: {
+              subStatus: 'EXPIRED',
               forceReadOnly: true,
               readOnlyReason: 'SUBSCRIPTION_EXPIRED'
             }
           });
-          recordReminder(college.id, 'EXPIRY_TRANSITION', {
-            collegeId: college.id,
-            type: 'SUBSCRIPTION_EXPIRED',
-            message: 'Subscription grace period has elapsed. Workspace locked to read-only.'
-          }, periodEnd);
+          if (tx.collegeEntitlementAudit?.create) {
+            await tx.collegeEntitlementAudit.create({
+              data: {
+                college_id: college.id,
+                actorUserId: 'LIFECYCLE_WORKER',
+                action: 'SUBSCRIPTION_EXPIRED',
+                beforeStateJson: { subStatus: college.subStatus },
+                afterStateJson: { subStatus: 'EXPIRED', forceReadOnly: true, readOnlyReason: 'SUBSCRIPTION_EXPIRED' },
+                reason: 'Subscription term ended without renewal'
+              }
+            });
+          }
+          if (!hasLog(college.id, 'EXPIRY_TRANSITION', periodEnd)) {
+            recordReminder(college.id, 'EXPIRY_TRANSITION', {
+              collegeId: college.id,
+              type: 'SUBSCRIPTION_EXPIRED',
+              recipient: 'ADMIN',
+              title: 'Subscription Expired',
+              message: 'Your subscription term has ended. Please renew your subscription to restore access.'
+            }, periodEnd);
+            outboxEventsToCreate.push({
+              eventType: 'TRIAL_EXPIRED_EMAIL',
+              college_id: college.id,
+              payload: { collegeId: college.id, reason: 'SUBSCRIPTION_EXPIRED' }
+            });
+          }
           readOnlyTransitions++;
         }
 
@@ -341,8 +397,8 @@ async function runLifecycleWorker() {
   });
 }
 
-function startSubscriptionLifecycleWorker(intervalMs = 24 * 60 * 60 * 1000) {
-  console.log('[LifecycleWorker] Background scheduler initialized (interval:', intervalMs, 'ms)');
+function startSubscriptionLifecycleWorker() {
+  console.log('[LifecycleWorker] Daily cron scheduler initialized (00:05 Asia/Karachi)');
   const execute = async () => {
     try {
       await runLifecycleWorker();
@@ -350,8 +406,14 @@ function startSubscriptionLifecycleWorker(intervalMs = 24 * 60 * 60 * 1000) {
       console.error('[LifecycleWorker] Error executing cycle:', e);
     }
   };
-  execute(); // immediate first execution (sends 90d grandfather alerts)
-  return setInterval(execute, intervalMs);
+  // Initial catch-up sweep 10s after boot
+  const bootTimer = setTimeout(execute, 10000);
+  // Daily at 00:05 PKT (Asia/Karachi)
+  const task = cron.schedule('5 0 * * *', execute, {
+    scheduled: true,
+    timezone: 'Asia/Karachi',
+  });
+  return { task, bootTimer };
 }
 
 module.exports = {

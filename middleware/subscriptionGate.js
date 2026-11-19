@@ -31,12 +31,12 @@ function subscriptionGate(requiredFeatureKey = null) {
       // 3. Resolve full entitlements snapshot
       const entitlements = req.entitlements || (req.entitlements = await getEntitlements(collegeId));
 
-      // Check Suspended state - blocks everything
-      if (entitlements.subStatus === 'SUSPENDED') {
+      // Check Deactivated / Suspended state - blocks everything
+      if (['SUSPENDED', 'DEACTIVATED'].includes(entitlements.subStatus)) {
         return res.status(403).json({
           success: false,
           code: 'ACCOUNT_SUSPENDED',
-          message: 'Institution subscription is currently suspended.'
+          message: 'College subscription inactive, contact your administration'
         });
       }
 

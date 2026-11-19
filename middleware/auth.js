@@ -67,9 +67,13 @@ const protect = async (req, res, next) => {
       _id: user.id
     };
 
-    // Phase 10: N15 Campus IP Allow-Listing Enforcement
+    // Phase 10: N15 Campus IP Allow-Listing Enforcement + Subscription Access Lock
     const { ipAllowlistMiddleware } = require('./ipAllowlist.middleware');
-    return ipAllowlistMiddleware(req, res, next);
+    const { evaluateSubscriptionAccess } = require('./subscriptionAccessLock');
+    return ipAllowlistMiddleware(req, res, (ipErr) => {
+      if (ipErr) return next(ipErr);
+      return evaluateSubscriptionAccess(req, res, next);
+    });
   } catch (error) {
     return res.status(401).json({
       success: false,

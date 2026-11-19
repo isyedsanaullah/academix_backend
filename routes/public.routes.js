@@ -19,7 +19,7 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB max
 
-const { verifyInvitationToken, acceptInvitation } = require('../controllers/invitation.controller');
+const { verifyInvitationToken, acceptInvitation, requestNewInvitation } = require('../controllers/invitation.controller');
 const { getInviteStatus, acceptInvite, acceptInviteGoogle } = require('../controllers/publicInvite.controller');
 const { verifyPublicDocument } = require('../controllers/verify.controller');
 const rateLimit = require('express-rate-limit');
@@ -152,8 +152,9 @@ router.get('/services-catalog', getPublicServicesCatalog);
 router.post('/contact', submitContactForm);
 
 // Invitation Acceptance Public Routes (Rate Limited)
-router.get('/invitations/verify/:token', invitationRateLimiter, verifyInvitationToken);
-router.post('/invitations/accept', invitationRateLimiter, acceptInvitation);
+router.get('/invitations/verify/:token', invitationRateLimiter, noReferrer, verifyInvitationToken);
+router.post('/invitations/accept', invitationRateLimiter, noReferrer, acceptInvitation);
+router.post('/invitations/request-new', invitationRateLimiter, noReferrer, requestNewInvitation);
 
 // Public Document Verification (30 req/min per IP rate limit)
 router.get('/verify/:token', verifyRateLimiter, verifyPublicDocument);

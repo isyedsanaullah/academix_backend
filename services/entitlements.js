@@ -8,6 +8,8 @@ const {
   getPlanLimits,
   normalizePlanId
 } = require('../config/planConstants');
+const { TRIAL_ENTITLEMENT_PLAN } = require('../config/trialConfig');
+const { computeSubscriptionSnapshot } = require('./subscriptionStateService');
 const {
   FEATURE_ALIASES,
   getFeatureRegistry,
@@ -86,6 +88,7 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
       planVersionId: true,
       billingCycle: true,
       subStatus: true,
+      trialStartedAt: true,
       trialEndsAt: true,
       periodStart: true,
       periodEnd: true,
@@ -119,7 +122,13 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
   }
 
   const subJson = (college.subscription && typeof college.subscription === 'object') ? college.subscription : {};
-  const rawPlanInput = college.planId || subJson.plan || subJson.planId || 'starter';
+  const snapshot = computeSubscriptionSnapshot(college, now);
+  const isActiveTrialWithoutPaidPeriod =
+    (snapshot.subStatus === 'TRIAL' || snapshot.subStatus === 'PENDING_PAYMENT') &&
+    !(college.periodEnd && new Date(college.periodEnd) > now);
+  const rawPlanInput = isActiveTrialWithoutPaidPeriod
+    ? TRIAL_ENTITLEMENT_PLAN
+    : (college.planId || subJson.plan || subJson.planId || 'starter');
   const planId = normalizePlanId(rawPlanInput, threePlan);
   const planCfg = getPlanConfig(threePlan);
   let baseLimits = { ...(getPlanLimits(planId, threePlan) || planCfg.PLAN_LIMITS.starter) };
@@ -148,26 +157,12 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
     }
   }
 
-  // View-Only Lock Status
-  let isReadOnly = false;
-  let readOnlyReason = college.readOnlyReason || null;
-
-  if (college.forceReadOnly) {
-    isReadOnly = true;
-    readOnlyReason = college.readOnlyReason || 'ADMIN_FORCED';
-  } else if (college.subStatus === 'SUSPENDED' || subJson.status === 'suspended') {
+  // View-Only / Lock Status from state snapshot
+  let isReadOnly = Boolean(snapshot.isLocked || college.forceReadOnly);
+  let readOnlyReason = snapshot.lockReason || college.readOnlyReason || null;
+  if (!isReadOnly && subJson.status === 'suspended') {
     isReadOnly = true;
     readOnlyReason = 'SUSPENDED';
-  } else if (college.subStatus === 'TRIAL') {
-    if (college.trialEndsAt && new Date(college.trialEndsAt) < now) {
-      isReadOnly = true;
-      readOnlyReason = 'TRIAL_EXPIRED';
-    }
-  } else if (college.subStatus === 'ACTIVE') {
-    if (college.periodEnd && new Date(college.periodEnd) < now) {
-      isReadOnly = true;
-      readOnlyReason = 'SUBSCRIPTION_EXPIRED';
-    }
   }
 
   // Aggregate Active Add-Ons (fixing STORAGE_GB 10 GB blocks & APPLICATIONS 25/pack multipliers)
@@ -370,21 +365,30 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
   const finalEffectiveKeys = Array.from(effectiveSet);
   const { capabilities, degraded } = resolveCapabilitiesSnapshot(featureStates);
 
-  const isCollegeActive = college.isActive !== false && college.subStatus !== 'SUSPENDED' && subJson.status !== 'suspended';
+  const isCollegeActive =
+    college.isActive !== false &&
+    !snapshot.isDeactivated &&
+    college.subStatus !== 'SUSPENDED' &&
+    subJson.status !== 'suspended';
 
   return {
     active: isCollegeActive,
-    reason: isCollegeActive ? null : (college.subStatus === 'SUSPENDED' ? 'SUSPENDED' : 'COLLEGE_INACTIVE'),
+    reason: isCollegeActive ? null : (snapshot.lockReason || 'COLLEGE_INACTIVE'),
     collegeId: college.id,
     collegeName: college.name,
     planId,
     billingCycle: college.billingCycle || 'MONTHLY',
     subStatus: college.subStatus,
+    effectiveSubStatus: snapshot.effectiveSubStatus,
     isCustomQuote: Boolean(college.isCustomQuote),
     customQuoteNotes: college.customQuoteNotes || null,
     grandfatheredUntil: college.grandfatheredUntil || null,
     grandfatherReason: college.grandfatherReason || null,
-    trialEndsAt: college.trialEndsAt,
+    trialStartedAt: snapshot.trialStartedAt,
+    trialEndsAt: snapshot.trialEndsAt,
+    daysRemaining: snapshot.daysRemaining,
+    isLocked: snapshot.isLocked,
+    lockReason: snapshot.lockReason,
     periodStart: college.periodStart,
     periodEnd: college.periodEnd,
     annualQuotaCycleStart: college.annualQuotaCycleStart || college.periodStart,

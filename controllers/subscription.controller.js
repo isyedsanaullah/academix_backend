@@ -146,14 +146,51 @@ async function getCurrentSubscription(req, res) {
     const messageCredits = await getMessageCreditBalance(collegeId, prisma);
     const aiCredits = await getAICreditBalance(collegeId, prisma);
 
-    // Fetch any pending payment requests
-    const pendingPayment = await prisma.collegeSubscriptionPayment.findFirst({
-      where: {
-        college_id: collegeId,
-        status: 'PENDING'
-      },
-      orderBy: { createdAt: 'desc' }
-    });
+    // Fetch any pending payment requests, active locked subscription, and latest invoice
+    const [pendingPayment, activeSubscription, latestInvoice] = await Promise.all([
+      prisma.collegeSubscriptionPayment.findFirst({
+        where: {
+          college_id: collegeId,
+          status: 'PENDING'
+        },
+        orderBy: { createdAt: 'desc' }
+      }),
+      prisma.collegeSubscription?.findFirst
+        ? prisma.collegeSubscription.findFirst({
+            where: { college_id: collegeId, status: 'ACTIVE' },
+            orderBy: { createdAt: 'desc' }
+          }).catch(() => null)
+        : null,
+      prisma.platformInvoice?.findFirst
+        ? prisma.platformInvoice.findFirst({
+            where: { college_id: collegeId, status: { notIn: ['VOID', 'void'] } },
+            orderBy: { createdAt: 'desc' }
+          }).catch(() => null)
+        : null
+    ]);
+
+    const { BANK_DETAILS } = require('../config/billingConfig');
+    let priceChangedOnRenewal = null;
+    if (activeSubscription) {
+      const latestPv = prisma.planVersion?.findFirst
+        ? await prisma.planVersion.findFirst({
+            where: { planId: activeSubscription.planId },
+            orderBy: { version: 'desc' }
+          }).catch(() => null)
+        : null;
+      const livePlanPricing = PLAN_PRICING[activeSubscription.planId];
+      const livePrice = activeSubscription.billingCycle === 'YEARLY'
+        ? (latestPv?.pricesJson?.yearlyPkr ?? livePlanPricing?.yearly ?? null)
+        : (latestPv?.pricesJson?.monthlyPkr ?? livePlanPricing?.monthly ?? null);
+      if (livePrice !== null && livePrice !== activeSubscription.planPricePkr) {
+        priceChangedOnRenewal = {
+          lockedPlanPricePkr: activeSubscription.planPricePkr,
+          currentListPlanPricePkr: livePrice,
+          billingCycle: activeSubscription.billingCycle,
+          planId: activeSubscription.planId
+        };
+      }
+    }
 
     return res.status(200).json({
       success: true,
@@ -163,11 +200,16 @@ async function getCurrentSubscription(req, res) {
         planId: entitlements.planId,
         billingCycle: entitlements.billingCycle,
         subStatus: entitlements.subStatus,
+        effectiveSubStatus: entitlements.effectiveSubStatus,
         isCustomQuote: Boolean(entitlements.isCustomQuote),
         customQuoteNotes: entitlements.customQuoteNotes || null,
         grandfatheredUntil: entitlements.grandfatheredUntil || null,
         grandfatherReason: entitlements.grandfatherReason || null,
+        trialStartedAt: entitlements.trialStartedAt,
         trialEndsAt: entitlements.trialEndsAt,
+        daysRemaining: entitlements.daysRemaining,
+        isLocked: entitlements.isLocked,
+        lockReason: entitlements.lockReason,
         periodStart: entitlements.periodStart,
         periodEnd: entitlements.periodEnd,
         annualQuotaCycleStart: entitlements.annualQuotaCycleStart,
@@ -198,6 +240,10 @@ async function getCurrentSubscription(req, res) {
         },
         activeAddons: entitlements.activeAddons,
         addonCapacity: entitlements.addonCapacity,
+        activeSubscription,
+        latestInvoice,
+        bankDetails: BANK_DETAILS,
+        priceChangedOnRenewal,
         pendingPayment,
         stats: entitlements.stats
       }
@@ -534,14 +580,30 @@ async function calculateTotal(req, res) {
         : PLAN_PRICING[resolvedPlanId].monthly;
       basePlanAmount = planPrice;
 
-      // If upgrade during active paid period, compute proration credit of current unexpired plan
-      if (type === 'UPGRADE' && entitlements.subStatus === 'ACTIVE' && entitlements.periodEnd && new Date(entitlements.periodEnd) > new Date()) {
+      // If upgrade during active paid period, compute proration credit from LOCKED subscription price (if enabled)
+      const { isUpgradeProrationEnabled } = require('../config/billingConfig');
+      if (
+        isUpgradeProrationEnabled() &&
+        type === 'UPGRADE' &&
+        entitlements.subStatus === 'ACTIVE' &&
+        entitlements.periodEnd &&
+        new Date(entitlements.periodEnd) > new Date()
+      ) {
         const msRemaining = Math.max(0, new Date(entitlements.periodEnd).getTime() - Date.now());
         const daysRemaining = Math.floor(msRemaining / (1000 * 60 * 60 * 24));
-        const currentCycleDays = entitlements.billingCycle === 'YEARLY' ? 365 : 30;
-        const currentPlanPrice = entitlements.billingCycle === 'YEARLY'
-          ? PLAN_PRICING[entitlements.planId]?.yearly || 0
-          : PLAN_PRICING[entitlements.planId]?.monthly || 0;
+        const lockedSub = prisma.collegeSubscription?.findFirst
+          ? await prisma.collegeSubscription.findFirst({
+              where: { college_id: collegeId, status: 'ACTIVE' },
+              orderBy: { createdAt: 'desc' }
+            }).catch(() => null)
+          : null;
+        const currentCycle = (lockedSub?.billingCycle || entitlements.billingCycle || 'MONTHLY').toUpperCase();
+        const currentCycleDays = currentCycle === 'YEARLY' ? 365 : 30;
+        const currentPlanPrice = lockedSub?.planPricePkr ?? (
+          currentCycle === 'YEARLY'
+            ? PLAN_PRICING[entitlements.planId]?.yearly || 0
+            : PLAN_PRICING[entitlements.planId]?.monthly || 0
+        );
 
         if (daysRemaining > 0 && currentPlanPrice > 0) {
           const rawCredit = Math.round((currentPlanPrice * daysRemaining) / currentCycleDays);
@@ -632,10 +694,442 @@ async function getPaymentHistory(req, res) {
   }
 }
 
+/**
+ * GET /api/subscription/plans-catalog
+ * Returns live canonical plans, limits, services, add-ons, and UBL bank config.
+ */
+async function getPlansCatalogHandler(req, res) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id || null;
+    const prisma = getSystemClient();
+    const { getPlansCatalog } = require('../services/subscriptionBillingService');
+    const catalog = await getPlansCatalog(prisma, collegeId);
+    return res.status(200).json({ success: true, data: catalog });
+  } catch (err) {
+    console.error('[SubscriptionController.getPlansCatalogHandler] Error:', err);
+    return res.status(500).json({
+      success: false,
+      code: 'PLANS_CATALOG_ERROR',
+      message: 'Failed to retrieve plans catalog.'
+    });
+  }
+}
+
+/**
+ * POST /api/subscription/checkout
+ * Confirms plan + billing cycle + add-ons, creates locked CollegeSubscription & UNPAID PlatformInvoice.
+ */
+async function checkoutSubscriptionHandler(req, res) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id;
+    if (!collegeId) {
+      return res.status(403).json({ success: false, code: 'NO_COLLEGE_CONTEXT', message: 'No college associated with this user session.' });
+    }
+
+    const { planId, billingCycle = 'MONTHLY', lineItems = [] } = req.body || {};
+    const prisma = getSystemClient();
+    const { createSubscriptionCheckout } = require('../services/subscriptionBillingService');
+
+    const result = await createSubscriptionCheckout(prisma, {
+      collegeId,
+      userId: req.user?.id || req.user?._id,
+      planId,
+      billingCycle,
+      lineItems,
+      ipAddress: req.ip || null
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: `Invoice ${result.invoice.invoiceNo} generated. Please download the 3-copy bank voucher and upload your payment proof.`,
+      data: result
+    });
+  } catch (err) {
+    if (err.status && err.status < 500) {
+      return res.status(err.status).json({
+        success: false,
+        code: err.code || 'CHECKOUT_VALIDATION_ERROR',
+        message: err.message,
+        ...(err.invoice ? { invoice: err.invoice } : {})
+      });
+    }
+    console.error('[SubscriptionController.checkoutSubscriptionHandler] Error:', err);
+    return res.status(500).json({
+      success: false,
+      code: 'CHECKOUT_ERROR',
+      message: 'Failed to create subscription checkout invoice.'
+    });
+  }
+}
+
+/**
+ * GET /api/subscription/invoices
+ * Lists college's subscription invoices with proof submissions & locked subscription snapshot.
+ */
+async function getCollegeInvoicesHandler(req, res) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id;
+    if (!collegeId) {
+      return res.status(403).json({ success: false, code: 'NO_COLLEGE_CONTEXT', message: 'No college associated with this user session.' });
+    }
+
+    const prisma = getSystemClient();
+    const invoices = await prisma.platformInvoice.findMany({
+      where: { college_id: collegeId },
+      orderBy: { createdAt: 'desc' },
+      take: 50
+    });
+
+    const invoiceIds = invoices.map((i) => i.id);
+    const subIds = invoices.map((i) => i.subscriptionId).filter(Boolean);
+
+    const [submissions, subscriptions] = await Promise.all([
+      invoiceIds.length > 0 && prisma.invoiceProofSubmission?.findMany
+        ? prisma.invoiceProofSubmission.findMany({
+            where: { invoiceId: { in: invoiceIds }, college_id: collegeId },
+            orderBy: { createdAt: 'desc' }
+          })
+        : [],
+      subIds.length > 0 && prisma.collegeSubscription?.findMany
+        ? prisma.collegeSubscription.findMany({
+            where: { id: { in: subIds }, college_id: collegeId }
+          })
+        : []
+    ]);
+
+    const subMap = new Map((subscriptions || []).map((s) => [s.id, s]));
+    const subsByInvoice = new Map();
+    for (const s of submissions || []) {
+      if (!subsByInvoice.has(s.invoiceId)) subsByInvoice.set(s.invoiceId, []);
+      subsByInvoice.get(s.invoiceId).push(s);
+    }
+
+    const enriched = invoices.map((inv) => ({
+      ...inv,
+      amountPkr: Number(inv.amount || 0),
+      subscription: inv.subscriptionId ? subMap.get(inv.subscriptionId) || null : null,
+      submissions: subsByInvoice.get(inv.id) || []
+    }));
+
+    return res.status(200).json({ success: true, data: enriched });
+  } catch (err) {
+    console.error('[SubscriptionController.getCollegeInvoicesHandler] Error:', err);
+    return res.status(500).json({
+      success: false,
+      code: 'INVOICES_FETCH_ERROR',
+      message: 'Failed to retrieve billing invoices.'
+    });
+  }
+}
+
+/**
+ * GET /api/subscription/invoices/:id/voucher.pdf
+ * Streams the 3-copy UBL Bank Payment Voucher PDF (Bank Copy, College Copy, Accounts/Office Copy).
+ */
+async function downloadInvoiceVoucherPdfHandler(req, res, next) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id;
+    const { id } = req.params;
+    const prisma = getSystemClient();
+
+    const invoice = await prisma.platformInvoice.findFirst({
+      where: { id, college_id: collegeId }
+    });
+    if (!invoice) {
+      return res.status(404).json({ success: false, code: 'INVOICE_NOT_FOUND', message: 'Invoice not found.' });
+    }
+
+    const college = await prisma.college.findUnique({
+      where: { id: collegeId },
+      select: { id: true, name: true, code: true, email: true, city: true }
+    });
+
+    const { generateSubscriptionVoucherPDF } = require('../services/documentTemplates/subscriptionVoucher');
+    const { getFrontendBaseUrl } = require('../config/env');
+
+    const pdfDoc = await generateSubscriptionVoucherPDF({
+      invoice,
+      college,
+      verifyBaseUrl: getFrontendBaseUrl()
+    });
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="voucher_${invoice.invoiceNo}.pdf"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    pdfDoc.pipe(res);
+    pdfDoc.end();
+  } catch (err) {
+    next(err);
+  }
+}
+
+/**
+ * POST /api/subscription/invoices/:id/proof
+ * Uploads screenshot/PDF to Cloudflare R2 (max 5 MB, JPG/PNG/PDF) + optional referenceNumber & note.
+ */
+async function uploadInvoiceProofHandler(req, res) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id;
+    if (!collegeId) {
+      return res.status(403).json({ success: false, code: 'NO_COLLEGE_CONTEXT', message: 'No college associated with this user session.' });
+    }
+
+    const { id } = req.params;
+    const { referenceNumber, note } = req.body || {};
+    const prisma = getSystemClient();
+
+    const invoice = await prisma.platformInvoice.findFirst({
+      where: { id, college_id: collegeId }
+    });
+    if (!invoice) {
+      return res.status(404).json({ success: false, code: 'INVOICE_NOT_FOUND', message: 'Invoice not found.' });
+    }
+
+    const currentStatus = String(invoice.status || '').toUpperCase();
+    if (currentStatus === 'PENDING_REVIEW') {
+      return res.status(409).json({
+        success: false,
+        code: 'ALREADY_PENDING_REVIEW',
+        message: 'Payment proof for this invoice is already awaiting Super Admin review.'
+      });
+    }
+    if (currentStatus === 'APPROVED' || currentStatus === 'PAID') {
+      return res.status(400).json({
+        success: false,
+        code: 'INVOICE_ALREADY_APPROVED',
+        message: 'This invoice has already been approved.'
+      });
+    }
+    if (currentStatus === 'VOID') {
+      return res.status(400).json({
+        success: false,
+        code: 'INVOICE_VOID',
+        message: 'This invoice has been voided. Please generate a new voucher.'
+      });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        code: 'MISSING_PROOF_FILE',
+        message: 'Please attach a payment screenshot or PDF receipt (JPG, PNG, or PDF, max 5 MB).'
+      });
+    }
+
+    const { PROOF_ALLOWED_MIMES, PROOF_UPLOAD_MAX_BYTES } = require('../config/billingConfig');
+    if (!PROOF_ALLOWED_MIMES.includes(req.file.mimetype)) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_FILE_TYPE',
+        message: 'Only JPG, PNG, or PDF files are allowed.'
+      });
+    }
+    if (req.file.size > PROOF_UPLOAD_MAX_BYTES) {
+      return res.status(400).json({
+        success: false,
+        code: 'FILE_TOO_LARGE',
+        message: 'Payment proof file must be 5 MB or smaller.'
+      });
+    }
+
+    const {
+      uploadObject,
+      generateObjectKey,
+      validateFileSignature
+    } = require('../services/storageService');
+
+    const sigCheck = validateFileSignature(req.file.buffer, req.file.mimetype);
+    if (!sigCheck.valid) {
+      return res.status(400).json({
+        success: false,
+        code: 'INVALID_FILE_SIGNATURE',
+        message: sigCheck.error || 'File contents do not match its file extension/MIME type.'
+      });
+    }
+
+    const cleanRef = typeof referenceNumber === 'string' && referenceNumber.trim()
+      ? referenceNumber.trim().slice(0, 80)
+      : null;
+    const cleanNote = typeof note === 'string' && note.trim()
+      ? note.trim().slice(0, 500)
+      : null;
+
+    if (cleanRef) {
+      const dup = await prisma.platformInvoice.findFirst({
+        where: {
+          id: { not: invoice.id },
+          referenceNumber: cleanRef,
+          status: { in: ['PENDING_REVIEW', 'APPROVED'] }
+        }
+      });
+      if (dup) {
+        return res.status(409).json({
+          success: false,
+          code: 'DUPLICATE_REFERENCE',
+          message: `Reference number '${cleanRef}' has already been submitted on another invoice.`
+        });
+      }
+    }
+
+    const objectKey = generateObjectKey(collegeId, 'billing-proofs', invoice.id, req.file.originalname || 'proof.png');
+    await uploadObject({
+      objectKey,
+      body: req.file.buffer,
+      contentType: req.file.mimetype,
+      metadata: {
+        collegeId,
+        invoiceId: invoice.id,
+        invoiceNo: invoice.invoiceNo
+      }
+    });
+
+    const now = new Date();
+    const submittedBy = req.user?.email || req.user?.id || 'college-admin';
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await tx.invoiceProofSubmission.create({
+        data: {
+          invoiceId: invoice.id,
+          college_id: collegeId,
+          objectKey,
+          mimeType: req.file.mimetype,
+          sizeBytes: req.file.size,
+          referenceNumber: cleanRef,
+          note: cleanNote,
+          status: 'PENDING_REVIEW',
+          submittedBy
+        }
+      });
+
+      const inv = await tx.platformInvoice.update({
+        where: { id: invoice.id },
+        data: {
+          status: 'PENDING_REVIEW',
+          method: 'bank',
+          reference: cleanRef,
+          referenceNumber: cleanRef,
+          submissionNote: cleanNote,
+          rejectionReason: null,
+          proofObjectKey: objectKey,
+          proofMimeType: req.file.mimetype,
+          proofSizeBytes: req.file.size,
+          submittedAt: now,
+          submittedBy
+        }
+      });
+
+      if (tx.collegeEntitlementAudit?.create) {
+        await tx.collegeEntitlementAudit.create({
+          data: {
+            college_id: collegeId,
+            actorUserId: String(req.user?.id || 'college-admin'),
+            actorEmail: req.user?.email || null,
+            action: 'INVOICE_PROOF_SUBMITTED',
+            beforeStateJson: { status: invoice.status },
+            afterStateJson: { status: 'PENDING_REVIEW', invoiceNo: invoice.invoiceNo, referenceNumber: cleanRef },
+            reason: cleanNote || `Payment proof uploaded for ${invoice.invoiceNo}`,
+            ipAddress: req.ip || null
+          }
+        });
+      }
+
+      return inv;
+    });
+
+    // Post-commit Super Admin notifications (in-app + email)
+    try {
+      const [college, superAdmins] = await Promise.all([
+        prisma.college.findUnique({ where: { id: collegeId }, select: { name: true } }),
+        prisma.user.findMany({ where: { role: 'superAdmin', isActive: true }, select: { id: true, email: true } })
+      ]);
+
+      if (superAdmins.length > 0) {
+        await prisma.notification.createMany({
+          data: superAdmins.map((sa) => ({
+            college_id: collegeId,
+            recipient: sa.id,
+            title: `Payment Proof Submitted: ${invoice.invoiceNo}`,
+            message: `${college?.name || 'A college'} uploaded bank transfer proof for PKR ${Number(invoice.amount || 0).toLocaleString('en-PK')}.`,
+            type: 'system',
+            link: '/super-admin/billing'
+          }))
+        }).catch(() => {});
+      }
+
+      const { getFrontendBaseUrl } = require('../config/env');
+      const { sendBillingProofSubmittedEmail } = require('../services/mailService');
+      const notifyEmail = process.env.SUPER_ADMIN_EMAIL || superAdmins[0]?.email;
+      if (notifyEmail) {
+        await sendBillingProofSubmittedEmail(notifyEmail, {
+          collegeName: college?.name || 'College',
+          invoiceNo: invoice.invoiceNo,
+          amountPkr: Number(invoice.amount || 0),
+          referenceNumber: cleanRef,
+          note: cleanNote,
+          reviewUrl: `${getFrontendBaseUrl()}/super-admin/billing`
+        }).catch((e) => console.error('[BillingProof] Email notify failed:', e.message));
+      }
+    } catch (notifyErr) {
+      console.error('[BillingProof] Super admin notification error:', notifyErr.message);
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Payment proof sent to Super Admin for verification.',
+      data: updated
+    });
+  } catch (err) {
+    console.error('[SubscriptionController.uploadInvoiceProofHandler] Error:', err);
+    return res.status(500).json({
+      success: false,
+      code: 'PROOF_UPLOAD_ERROR',
+      message: 'Failed to upload payment proof.'
+    });
+  }
+}
+
+/**
+ * GET /api/subscription/invoices/:id/proof-url
+ * Returns a short-lived presigned R2 URL for the college admin to preview their uploaded proof.
+ */
+async function getInvoiceProofUrlHandler(req, res) {
+  try {
+    const collegeId = req.collegeId || req.user?.college_id;
+    const { id } = req.params;
+    const prisma = getSystemClient();
+
+    const invoice = await prisma.platformInvoice.findFirst({
+      where: { id, college_id: collegeId }
+    });
+    if (!invoice || !invoice.proofObjectKey) {
+      return res.status(404).json({ success: false, message: 'Payment proof not found.' });
+    }
+
+    const { getPresignedDownloadUrl } = require('../services/storageService');
+    const url = await getPresignedDownloadUrl({ objectKey: invoice.proofObjectKey, expiresIn: 900 });
+    return res.status(200).json({
+      success: true,
+      url,
+      mimeType: invoice.proofMimeType || null,
+      expiresIn: 900
+    });
+  } catch (err) {
+    console.error('[SubscriptionController.getInvoiceProofUrlHandler] Error:', err);
+    return res.status(500).json({ success: false, message: 'Failed to generate proof preview URL.' });
+  }
+}
+
 module.exports = {
   getCurrentSubscription,
   getAddonCatalog,
+  getPlansCatalogHandler,
   calculateTotal,
+  checkoutSubscriptionHandler,
+  getCollegeInvoicesHandler,
+  downloadInvoiceVoucherPdfHandler,
+  uploadInvoiceProofHandler,
+  getInvoiceProofUrlHandler,
   submitPaymentProof,
   getPaymentHistory
 };

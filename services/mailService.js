@@ -46,7 +46,8 @@ const createTransporter = () => {
             to: toList,
             subject: opts.subject,
             html: opts.html || undefined,
-            text: opts.text || undefined
+            text: opts.text || undefined,
+            ...(opts.headers ? { headers: opts.headers } : {})
           });
           if (res.error) {
             console.error('[MailService] Resend error:', res.error);
@@ -117,7 +118,7 @@ function isSecurityNotificationSubject(subject = '') {
  * Set isSecurityEmail=true (or verification/2FA/password reset subjects) to ALWAYS bypass bulk email caps.
  * Set throwOnError=true when the caller must know about failures.
  */
-async function send({ to, subject, html, text, throwOnError = false, collegeId = null, isSecurityEmail = false }) {
+async function send({ to, subject, html, text, headers = null, throwOnError = false, collegeId = null, isSecurityEmail = false }) {
   const exemptFromQuota = Boolean(isSecurityEmail) || isSecurityNotificationSubject(subject);
   try {
     if (!to || !subject || (!html && !text)) {
@@ -146,7 +147,8 @@ async function send({ to, subject, html, text, throwOnError = false, collegeId =
       to: Array.isArray(to) ? to.join(', ') : to,
       subject,
       html: html || undefined,
-      text: text || undefined
+      text: text || undefined,
+      ...(headers ? { headers } : {})
     });
 
     if (collegeId && !exemptFromQuota && quotaService) {
@@ -312,37 +314,30 @@ function otpBlock(code, color = BLUE) {
 // ── High-level send helpers ───────────────────────────────────────────────────
 
 /**
- * Send a college/super-admin invitation email.
+ * Send a college/super-admin invitation email (no plan pre-selected; 14-day free trial included).
  * @param {string} to
- * @param {{ inviteUrl: string, planId?: string, expiresAt?: Date|string, collegeName?: string }} opts
+ * @param {{ inviteUrl: string, expiresAt?: Date|string, collegeName?: string, invitationId?: string }} opts
  */
-async function sendInvitationEmail(to, { inviteUrl, planId, expiresAt, collegeName } = {}) {
-  const planColors = {
-    basic:      { label: 'Basic',      color: '#64748B', bg: '#F1F5F9' },
-    standard:   { label: 'Standard',   color: BLUE,      bg: '#EFF6FF' },
-    premium:    { label: 'Premium',    color: '#D97706', bg: '#FFFBEB' },
-    enterprise: { label: 'Enterprise', color: GREEN,     bg: '#F0FDF4' }
-  };
-  const plan = planColors[(planId || '').toLowerCase()] || planColors.basic;
-
+async function sendInvitationEmail(to, { inviteUrl, expiresAt, collegeName, invitationId } = {}) {
   const expiryStr = expiresAt
-    ? new Date(expiresAt).toLocaleString('en-US', {
+    ? new Date(expiresAt).toLocaleString('en-PK', {
+        timeZone: 'Asia/Karachi',
         weekday: 'short', month: 'short', day: 'numeric',
-        year: 'numeric', hour: '2-digit', minute: '2-digit', timeZoneName: 'short'
-      })
+        year: 'numeric', hour: '2-digit', minute: '2-digit'
+      }) + ' PKT'
     : '48 hours from now';
 
   const bodyHtml = `
     <p style="margin:0 0 20px;">
       ${collegeName ? `<strong>${collegeName}</strong> has been` : 'Your institution has been'}
-      invited to the <strong>CollegesHub</strong> smart college management platform.
-      Click the button below to accept your invitation and set up your workspace.
+      invited to join <strong>CollegesHub</strong> — the complete college management platform.
+      Click the button below to create your administrator account and start your <strong>14-day free trial</strong>.
     </p>
 
-    <!-- Plan badge -->
+    <!-- Trial badge -->
     <div style="margin-bottom:20px;">
-      <span style="display:inline-block;padding:5px 16px;border-radius:99px;background:${plan.bg};color:${plan.color};font-size:12px;font-weight:700;border:1px solid ${plan.color}40;">
-        ${plan.label} Plan
+      <span style="display:inline-block;padding:6px 16px;border-radius:99px;background:#F0FDF4;color:#1F7A3A;font-size:12px;font-weight:700;border:1px solid #BBF7D0;">
+        14-Day Free Trial Included · Choose a plan anytime before trial ends
       </span>
     </div>
 
@@ -360,7 +355,7 @@ async function sendInvitationEmail(to, { inviteUrl, planId, expiresAt, collegeNa
 
     <!-- Fallback URL -->
     <p style="margin:24px 0 0;color:#64748B;font-size:13px;">
-      If the button doesn't work, copy and paste this link:<br>
+      If the button doesn't work, copy and paste this exact link into your browser:<br>
       <a href="${inviteUrl}" style="color:${BLUE};word-break:break-all;">${inviteUrl}</a>
     </p>
 
@@ -377,7 +372,7 @@ async function sendInvitationEmail(to, { inviteUrl, planId, expiresAt, collegeNa
 
   const html = buildCollegeshubTemplate({
     title: "You're invited to join CollegesHub 🎉",
-    preheader: 'Accept your CollegesHub platform invitation',
+    preheader: 'Accept your CollegesHub invitation and start your 14-day free trial',
     bodyHtml,
     buttonText: 'Accept Invitation & Get Started →',
     buttonUrl: inviteUrl
@@ -389,12 +384,57 @@ async function sendInvitationEmail(to, { inviteUrl, planId, expiresAt, collegeNa
     html,
     text: toPlainText({
       title: "You're invited to CollegesHub",
-      bodyText: `Accept your invitation here: ${inviteUrl}\nExpires: ${expiryStr}`,
+      bodyText: `Your institution has been invited to CollegesHub with a 14-day free trial.\n\nAccept your invitation here: ${inviteUrl}\nExpires: ${expiryStr}`,
       buttonText: 'Accept Invitation',
       buttonUrl: inviteUrl,
       footerNote: 'This link is single-use. Do not share it.'
     }),
-    throwOnError: true
+    headers: invitationId ? { 'X-Entity-Ref-ID': String(invitationId) } : null,
+    throwOnError: true,
+    isSecurityEmail: true
+  });
+}
+
+/**
+ * Notify Super Admin that an invitee requested a fresh invitation link after expiry.
+ */
+async function sendInvitationRenewalRequestEmail(to, { email, collegeName, requestedAt, adminPanelUrl } = {}) {
+  const when = requestedAt
+    ? new Date(requestedAt).toLocaleString('en-PK', { timeZone: 'Asia/Karachi' }) + ' PKT'
+    : 'Just now';
+
+  const bodyHtml = `
+    <p style="margin:0 0 16px;">An invited institution tried to open an expired invitation link and requested a new invitation:</p>
+    <table cellpadding="0" cellspacing="0" width="100%" style="background:#F8FAFC;border-radius:12px;border:1px solid #E2E8F0;padding:18px;margin-bottom:20px;">
+      <tr><td style="padding-bottom:6px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Invited Email</td></tr>
+      <tr><td style="color:#0F172A;font-size:15px;font-weight:700;padding-bottom:14px;">${email}</td></tr>
+      ${collegeName ? `
+      <tr><td style="padding-bottom:6px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Institution</td></tr>
+      <tr><td style="color:#0F172A;font-size:14px;font-weight:600;padding-bottom:14px;">${collegeName}</td></tr>` : ''}
+      <tr><td style="padding-bottom:6px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Requested At</td></tr>
+      <tr><td style="color:#334155;font-size:13px;">${when}</td></tr>
+    </table>
+    <p style="margin:0;color:#64748B;font-size:13px;">Open Super Admin → Colleges → Invitations and click <strong>Resend</strong> to send a fresh link.</p>`;
+
+  const html = buildCollegeshubTemplate({
+    title: '🔁 New Invitation Link Requested',
+    preheader: `${email} requested a fresh invitation link`,
+    bodyHtml,
+    buttonText: 'Open Colleges & Invitations →',
+    buttonUrl: adminPanelUrl || 'https://www.collegeshub.org/super-admin/colleges'
+  });
+
+  return send({
+    to,
+    subject: `🔁 New Invitation Requested: ${email}`,
+    html,
+    text: toPlainText({
+      title: 'New Invitation Link Requested',
+      bodyText: `Email: ${email}\n${collegeName ? `Institution: ${collegeName}\n` : ''}Requested at: ${when}`,
+      buttonText: 'Open Colleges & Invitations',
+      buttonUrl: adminPanelUrl || 'https://www.collegeshub.org/super-admin/colleges'
+    }),
+    isSecurityEmail: true
   });
 }
 
@@ -550,6 +590,197 @@ async function sendContactDeveloperEmail(to, { name, email, phone, subject, mess
   });
 }
 
+/**
+ * Send trial countdown reminder email (7, 3, or 1 days left).
+ */
+async function sendTrialReminderEmail(to, { collegeName, daysRemaining, trialEndsAt, choosePlanUrl } = {}) {
+  const endStr = trialEndsAt
+    ? new Date(trialEndsAt).toLocaleDateString('en-PK', {
+        timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric'
+      })
+    : '';
+  const dayLabel = daysRemaining === 1 ? '1 day' : `${daysRemaining} days`;
+
+  const bodyHtml = `
+    <p style="margin:0 0 16px;">Hello <strong>${collegeName || 'College Administration'}</strong>,</p>
+    <p style="margin:0 0 16px;">
+      You have <strong>${dayLabel} left</strong> in your 14-day CollegesHub free trial${endStr ? ` (ends <strong>${endStr}</strong>)` : ''}.
+    </p>
+    <p style="margin:0 0 16px;color:#475569;font-size:14px;">
+      To keep your campus running without interruption, choose a plan and billing term before your trial ends.
+    </p>`;
+
+  const html = buildCollegeshubTemplate({
+    title: `${dayLabel} left in your CollegesHub free trial`,
+    preheader: `${collegeName || 'Your college'} has ${dayLabel} remaining in the free trial.`,
+    bodyHtml,
+    buttonText: 'Choose Plan & Pay →',
+    buttonUrl: choosePlanUrl || 'https://www.collegeshub.org/admin/choose-plan',
+    footerNote: 'Once your trial ends without an active subscription, non-admin portals will be paused until renewal.'
+  });
+
+  return send({
+    to,
+    subject: `⏰ ${dayLabel} left in your CollegesHub free trial — ${collegeName || ''}`.trim(),
+    html,
+    text: toPlainText({
+      title: `${dayLabel} left in your CollegesHub free trial`,
+      bodyText: `You have ${dayLabel} left in your free trial${endStr ? ` (ends ${endStr})` : ''}.`,
+      buttonText: 'Choose Plan & Pay',
+      buttonUrl: choosePlanUrl || 'https://www.collegeshub.org/admin/choose-plan'
+    }),
+    isSecurityEmail: true
+  });
+}
+
+/**
+ * Send trial / subscription expired lock notification email.
+ */
+async function sendTrialExpiredEmail(to, { collegeName, reason = 'TRIAL_EXPIRED', renewUrl } = {}) {
+  const isTrial = reason === 'TRIAL_EXPIRED';
+  const title = isTrial ? 'Your 14-day CollegesHub free trial has ended' : 'Your CollegesHub subscription has expired';
+
+  const bodyHtml = `
+    <p style="margin:0 0 16px;">Hello <strong>${collegeName || 'College Administration'}</strong>,</p>
+    <p style="margin:0 0 16px;">
+      ${isTrial
+        ? 'Your 14-day free trial has ended. Student, teacher, and staff access is temporarily paused until a subscription is activated.'
+        : 'Your subscription term has ended. Student, teacher, and staff access is temporarily paused until renewal is approved.'}
+    </p>
+    <p style="margin:0 0 16px;color:#475569;font-size:14px;">
+      Administrator accounts can still sign in to select a plan, download the UBL bank voucher, and upload payment proof.
+    </p>`;
+
+  const html = buildCollegeshubTemplate({
+    title,
+    preheader: `${collegeName || 'Your college'} workspace requires subscription renewal`,
+    bodyHtml,
+    buttonText: 'Renew Your Subscription →',
+    buttonUrl: renewUrl || 'https://www.collegeshub.org/admin/renew',
+    footerNote: 'Your college data remains safely preserved.'
+  });
+
+  return send({
+    to,
+    subject: `🔒 ${title} — ${collegeName || ''}`.trim(),
+    html,
+    text: toPlainText({
+      title,
+      bodyText: 'Your college workspace is currently locked for non-admin users. Sign in as admin to choose a plan and upload payment proof.',
+      buttonText: 'Renew Your Subscription',
+      buttonUrl: renewUrl || 'https://www.collegeshub.org/admin/renew'
+    }),
+    isSecurityEmail: true
+  });
+}
+
+/**
+ * Notify Super Admin when a college uploads a subscription payment proof.
+ */
+async function sendBillingProofSubmittedEmail(to, {
+  collegeName, invoiceNo, amountPkr, referenceNumber, note, reviewUrl
+} = {}) {
+  const bodyHtml = `
+    <p style="margin:0 0 16px;">A college administrator has uploaded bank transfer proof for review:</p>
+    <table cellpadding="0" cellspacing="0" width="100%" style="background:#F8FAFC;border-radius:12px;border:1px solid #E2E8F0;padding:18px;margin-bottom:20px;">
+      <tr><td style="padding-bottom:4px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Institution</td></tr>
+      <tr><td style="color:#0F172A;font-size:15px;font-weight:800;padding-bottom:12px;">${collegeName || 'College'}</td></tr>
+      <tr><td style="padding-bottom:4px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Invoice / Voucher</td></tr>
+      <tr><td style="color:#0F172A;font-size:14px;font-weight:700;padding-bottom:12px;">${invoiceNo} · PKR ${Number(amountPkr || 0).toLocaleString('en-PK')}</td></tr>
+      ${referenceNumber ? `<tr><td style="padding-bottom:4px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Reference No.</td></tr><tr><td style="color:#0F172A;font-size:13px;padding-bottom:12px;">${referenceNumber}</td></tr>` : ''}
+      ${note ? `<tr><td style="padding-bottom:4px;color:#64748B;font-size:11px;font-weight:700;text-transform:uppercase;">Note</td></tr><tr><td style="color:#334155;font-size:13px;">${note}</td></tr>` : ''}
+    </table>`;
+
+  const html = buildCollegeshubTemplate({
+    title: '🧾 New Subscription Payment Proof Uploaded',
+    preheader: `${collegeName} submitted payment proof for ${invoiceNo}`,
+    bodyHtml,
+    buttonText: 'Review Payment in Billing →',
+    buttonUrl: reviewUrl || 'https://www.collegeshub.org/super-admin/billing'
+  });
+
+  return send({
+    to,
+    subject: `🧾 Payment Proof Uploaded: ${collegeName} (${invoiceNo})`,
+    html,
+    text: toPlainText({
+      title: 'New Subscription Payment Proof Uploaded',
+      bodyText: `College: ${collegeName}\nInvoice: ${invoiceNo}\nAmount: PKR ${Number(amountPkr || 0).toLocaleString('en-PK')}${referenceNumber ? `\nRef: ${referenceNumber}` : ''}`,
+      buttonText: 'Review Payment',
+      buttonUrl: reviewUrl || 'https://www.collegeshub.org/super-admin/billing'
+    }),
+    isSecurityEmail: true
+  });
+}
+
+/**
+ * Notify College Admin when Super Admin approves or rejects their invoice payment proof.
+ */
+async function sendBillingDecisionEmail(to, {
+  collegeName, invoiceNo, decision, amountPkr, planName, billingCycle, periodEnd, reason, portalUrl
+} = {}) {
+  const isApproved = String(decision).toUpperCase() === 'APPROVED';
+  const periodStr = periodEnd
+    ? new Date(periodEnd).toLocaleDateString('en-PK', {
+        timeZone: 'Asia/Karachi', year: 'numeric', month: 'short', day: 'numeric'
+      })
+    : '';
+  const targetUrl = portalUrl || (isApproved
+    ? 'https://www.collegeshub.org/admin/subscription'
+    : 'https://www.collegeshub.org/admin/choose-plan');
+
+  const bodyHtml = isApproved
+    ? `
+      <p style="margin:0 0 16px;">Hello <strong>${collegeName || 'College Administration'}</strong>,</p>
+      <p style="margin:0 0 16px;">
+        Your payment for invoice <strong>${invoiceNo}</strong> (PKR ${Number(amountPkr || 0).toLocaleString('en-PK')}) has been <strong style="color:#299A49;">APPROVED</strong>.
+      </p>
+      <p style="margin:0 0 16px;color:#334155;font-size:14px;">
+        Your <strong>${planName || 'Subscription'} (${billingCycle || 'MONTHLY'})</strong> is now <strong>ACTIVE</strong>${periodStr ? ` through <strong>${periodStr}</strong>` : ''}, with your agreed price locked for the term.
+      </p>`
+    : `
+      <p style="margin:0 0 16px;">Hello <strong>${collegeName || 'College Administration'}</strong>,</p>
+      <p style="margin:0 0 16px;">
+        Your payment proof for invoice <strong>${invoiceNo}</strong> (PKR ${Number(amountPkr || 0).toLocaleString('en-PK')}) was <strong style="color:#DC2626;">REJECTED</strong>.
+      </p>
+      <table cellpadding="0" cellspacing="0" width="100%" style="background:#FEF2F2;border:1px solid #FECACA;border-radius:10px;padding:14px;margin-bottom:16px;">
+        <tr><td style="color:#991B1B;font-size:12px;font-weight:700;text-transform:uppercase;padding-bottom:4px;">Reason</td></tr>
+        <tr><td style="color:#7F1D1D;font-size:14px;">${reason || 'Bank receipt could not be verified.'}</td></tr>
+      </table>
+      <p style="margin:0 0 16px;color:#475569;font-size:14px;">
+        You can re-upload a clear transfer screenshot or PDF receipt directly in your portal.
+      </p>`;
+
+  const title = isApproved
+    ? `✅ Subscription Activated — ${invoiceNo}`
+    : `⚠️ Payment Proof Rejected — ${invoiceNo}`;
+
+  const html = buildCollegeshubTemplate({
+    title,
+    preheader: isApproved
+      ? `${collegeName} subscription is now active.`
+      : `Action required: re-upload payment proof for ${invoiceNo}`,
+    bodyHtml,
+    buttonText: isApproved ? 'Open Subscription Portal →' : 'Re-upload Payment Proof →',
+    buttonUrl: targetUrl,
+  });
+
+  return send({
+    to,
+    subject: title,
+    html,
+    text: toPlainText({
+      title,
+      bodyText: isApproved
+        ? `Your payment for ${invoiceNo} (PKR ${Number(amountPkr || 0).toLocaleString('en-PK')}) is approved. Subscription active${periodStr ? ` until ${periodStr}` : ''}.`
+        : `Your payment proof for ${invoiceNo} was rejected. Reason: ${reason || 'Could not be verified.'} Please re-upload in your portal.`,
+      buttonText: isApproved ? 'Open Subscription Portal' : 'Re-upload Proof',
+      buttonUrl: targetUrl,
+    }),
+    isSecurityEmail: true,
+  });
+}
+
 // ── generateCode (used by profile.controller) ─────────────────────────────────
 
 function generateCode() {
@@ -570,6 +801,11 @@ module.exports = {
   generateCode,
   // Named email helpers
   sendInvitationEmail,
+  sendInvitationRenewalRequestEmail,
+  sendTrialReminderEmail,
+  sendTrialExpiredEmail,
+  sendBillingProofSubmittedEmail,
+  sendBillingDecisionEmail,
   sendVerificationEmail,
   sendPasswordResetEmail,
   sendSubscriptionRequestEmail,

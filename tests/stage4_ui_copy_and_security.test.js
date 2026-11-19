@@ -54,8 +54,8 @@ function testT42AdminAndSuperAdminUI() {
   assert(adminSub.includes('grandfatheredUntil'), 'Admin subscription must display grandfathering notice when active');
 
   const saInvite = readClient('components/superAdmin/colleges/InviteCollegeDrawer.jsx');
-  assert(!saInvite.includes("{ id: 'enterprise'"), 'SuperAdmin invite drawer must replace enterprise with custom_quote');
-  assert(saInvite.includes('custom_quote'));
+  assert(!saInvite.includes('planId'), 'SuperAdmin invite drawer must not pre-select any plan');
+  assert(!saInvite.includes("{ id: 'enterprise'"), 'SuperAdmin invite drawer must not include enterprise plan');
 }
 
 async function run() {

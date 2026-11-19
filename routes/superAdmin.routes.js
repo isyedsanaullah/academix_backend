@@ -122,13 +122,22 @@ router.post('/branding/signature', signatureUpload.single('signature'), uploadPl
 const financeRoutes = require('../modules/superAdminFinance/finance.routes');
 router.use('/finance', financeRoutes);
 
-// ---- Phase 6A: Billing Settlement Queue ----
+// ---- Phase 6A & Unified Accounts / Billing Settlement Queue ----
 const {
   getPendingPayments,
   getAllPayments,
   approvePaymentHandler,
   rejectPaymentHandler,
   getReceiptUrl,
+  getBillingOverviewHandler,
+  getInvoiceDetailHandler,
+  getInvoiceProofUrlHandler,
+  approveInvoiceHandler,
+  denyInvoiceHandler,
+  activateCollegeSubscriptionHandler,
+  deactivateCollegeSubscriptionHandler,
+  getCollegeBillingHistoryHandler,
+  getBillingAuditLogsHandler,
 } = require('../controllers/superAdminBilling.controller');
 
 router.get('/billing/pending', getPendingPayments);
@@ -136,6 +145,16 @@ router.get('/billing/all', getAllPayments);
 router.post('/billing/approve/:paymentId', approvePaymentHandler);
 router.post('/billing/reject/:paymentId', rejectPaymentHandler);
 router.get('/billing/receipt/:paymentId', getReceiptUrl);
+
+router.get('/billing/overview', getBillingOverviewHandler);
+router.get('/billing/invoices/:invoiceId', getInvoiceDetailHandler);
+router.get('/billing/invoices/:invoiceId/proof-url', getInvoiceProofUrlHandler);
+router.post('/billing/invoices/:invoiceId/approve', approveInvoiceHandler);
+router.post('/billing/invoices/:invoiceId/deny', denyInvoiceHandler);
+router.get('/billing/colleges/:collegeId/history', getCollegeBillingHistoryHandler);
+router.post('/billing/colleges/:collegeId/activate', activateCollegeSubscriptionHandler);
+router.post('/billing/colleges/:collegeId/deactivate', deactivateCollegeSubscriptionHandler);
+router.get('/billing/audit-logs', getBillingAuditLogsHandler);
 
 // ---- Phase 6C: Plans & Platform Health ----
 const { getPlans, updatePlanVersion } = require('../controllers/superAdminPlans.controller');
