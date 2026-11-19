@@ -8,7 +8,7 @@ const {
   getPlanLimits,
   normalizePlanId
 } = require('../config/planConstants');
-const { TRIAL_ENTITLEMENT_PLAN } = require('../config/trialConfig');
+const { TRIAL_ENTITLEMENT_PLAN, TRIAL_QUOTA_LIMITS } = require('../config/trialConfig');
 const { computeSubscriptionSnapshot } = require('./subscriptionStateService');
 const {
   FEATURE_ALIASES,
@@ -133,14 +133,19 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
   const planCfg = getPlanConfig(threePlan);
   let baseLimits = { ...(getPlanLimits(planId, threePlan) || planCfg.PLAN_LIMITS.starter) };
 
-  // Pinned PlanVersion limits if available
-  if (college.planVersionId) {
+    // Pinned PlanVersion limits if available (ignored while on trial quota caps)
+  if (!isActiveTrialWithoutPaidPeriod && college.planVersionId) {
     const pv = await prisma.planVersion.findUnique({
       where: { id: college.planVersionId }
     });
     if (pv && pv.limitsJson && typeof pv.limitsJson === 'object') {
       baseLimits = { ...baseLimits, ...pv.limitsJson };
     }
+  }
+
+  // Enforce low, evaluation-safe limits during the 14-day Free Trial
+  if (isActiveTrialWithoutPaidPeriod) {
+    baseLimits = { ...baseLimits, ...TRIAL_QUOTA_LIMITS };
   }
 
   // CollegeQuotaOverride replaces base limit (grandfathering overrides expire after college.grandfatheredUntil)
@@ -389,6 +394,7 @@ async function getEntitlements(collegeId, dbClient = null, options = {}) {
     daysRemaining: snapshot.daysRemaining,
     isLocked: snapshot.isLocked,
     lockReason: snapshot.lockReason,
+    isTrialLimits: isActiveTrialWithoutPaidPeriod,
     periodStart: college.periodStart,
     periodEnd: college.periodEnd,
     annualQuotaCycleStart: college.annualQuotaCycleStart || college.periodStart,

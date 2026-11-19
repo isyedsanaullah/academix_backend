@@ -4423,6 +4423,29 @@ model AIUsageAlertConfig {
   updatedAt           DateTime  @updatedAt
 }
 
+model AnnouncementBanner {
+  id             String    @id @default(uuid())
+  scope          String    @default("PLATFORM") // PLATFORM (Super Admin) | COLLEGE (College Admin)
+  college_id     String?
+  title          String?
+  message        String
+  variant        String    @default("info") // info | success | warning | urgent
+  ctaLabel       String?
+  ctaUrl         String?
+  targetAudience String    @default("ALL_USERS") // ALL_USERS | ROLE_PANEL | ALL_COLLEGE_USERS | ADMINISTRATION_ONLY | TEACHERS_AND_STUDENTS
+  targetRoles    Json      @default("[]") // explicit role array when targetAudience = ROLE_PANEL
+  isActive       Boolean   @default(true)
+  startsAt       DateTime?
+  endsAt         DateTime?
+  createdBy      String
+  createdByEmail String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([scope, isActive])
+  @@index([college_id, isActive])
+}
+
 
 
 

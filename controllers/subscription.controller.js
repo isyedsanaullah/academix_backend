@@ -142,6 +142,22 @@ async function getCurrentSubscription(req, res) {
       usageMap[row.metric] = Number(row.value);
     }
 
+    // Live DB counts safeguard so trial/subscription meters are always accurate
+    const [liveStudents, liveStaff, liveAdmins, liveApps] = await Promise.all([
+      prisma.student?.count ? prisma.student.count({ where: { college_id: collegeId } }).catch(() => 0) : 0,
+      prisma.user?.count
+        ? prisma.user.count({ where: { college_id: collegeId, role: { in: ['principal', 'registrar', 'accountant', 'teacher', 'employee'] }, isActive: true } }).catch(() => 0)
+        : 0,
+      prisma.user?.count
+        ? prisma.user.count({ where: { college_id: collegeId, role: 'admin', isActive: true } }).catch(() => 0)
+        : 0,
+      prisma.application?.count ? prisma.application.count({ where: { college_id: collegeId } }).catch(() => 0) : 0,
+    ]);
+    usageMap.students = Math.max(usageMap.students || 0, liveStudents || 0);
+    usageMap.staff = Math.max(usageMap.staff || 0, liveStaff || 0);
+    usageMap.admins = Math.max(usageMap.admins || 0, liveAdmins || 0);
+    usageMap.applications = Math.max(usageMap.applications || 0, liveApps || 0);
+
     // Fetch credit balances
     const messageCredits = await getMessageCreditBalance(collegeId, prisma);
     const aiCredits = await getAICreditBalance(collegeId, prisma);
@@ -210,6 +226,7 @@ async function getCurrentSubscription(req, res) {
         daysRemaining: entitlements.daysRemaining,
         isLocked: entitlements.isLocked,
         lockReason: entitlements.lockReason,
+        isTrialLimits: Boolean(entitlements.isTrialLimits),
         periodStart: entitlements.periodStart,
         periodEnd: entitlements.periodEnd,
         annualQuotaCycleStart: entitlements.annualQuotaCycleStart,

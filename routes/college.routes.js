@@ -52,6 +52,16 @@ router.post('/:id/undo-status', authorize('superAdmin'), undoCollegeStatus);
 router.get('/invoices', authorize('admin'), getCollegeInvoices);
 router.get('/invoices/:id.pdf', authorize('admin'), downloadCollegeInvoicePDF);
 
+// College-Scoped Custom Announcement Banners (Tenant-Isolated)
+const {
+  listCollegeBanners,
+  createCollegeBanner,
+  updateCollegeBanner,
+  deleteCollegeBanner,
+} = require('../controllers/banner.controller');
+router.route('/banners').get(authorize('admin'), listCollegeBanners).post(authorize('admin'), createCollegeBanner);
+router.route('/banners/:id').put(authorize('admin'), updateCollegeBanner).delete(authorize('admin'), deleteCollegeBanner);
+
 
 router.meta = {
   "exempt": "core",

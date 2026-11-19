@@ -14,6 +14,7 @@ const ALWAYS_ALLOWED_PREFIXES = [
   '/api/auth/step-up',
   '/api/auth/verify-email',
   '/api/auth/resend-verification',
+  '/api/banners',
   '/api/public',
   '/api/health',
 ];

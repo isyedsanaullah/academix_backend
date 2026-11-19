@@ -183,6 +183,16 @@ const { getDeadLetters, retryDeadLetter } = require('../controllers/superAdminOu
 router.get('/outbox/dead-letter', getDeadLetters);
 router.post('/outbox/:id/retry', retryDeadLetter);
 
+// ---- Universal Platform Announcement Banners ----
+const {
+  listPlatformBanners,
+  createPlatformBanner,
+  updatePlatformBanner,
+  deletePlatformBanner,
+} = require('../controllers/banner.controller');
+router.route('/banners').get(listPlatformBanners).post(createPlatformBanner);
+router.route('/banners/:id').put(updatePlatformBanner).delete(deletePlatformBanner);
+
 router.meta = {
   "exempt": "platform",
   "reason": "Platform super-admin multi-tenant control plane"

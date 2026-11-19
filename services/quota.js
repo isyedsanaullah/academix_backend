@@ -2,14 +2,25 @@
 // Atomic quota counters & enforcement using CollegeUsage platform table.
 
 const { normalizePlan } = require('./collegeAdapter');
+const { TRIAL_QUOTA_LIMITS } = require('../config/trialConfig');
+
+const METRIC_TO_LIMIT_KEY = {
+  students: 'maxStudents',
+  staff: 'maxStaff',
+  admins: 'maxAdmins',
+  campuses: 'maxCampuses',
+  storageBytes: 'maxStorageBytes',
+  applications: 'maxApplications',
+  emailsSent: 'emailsMonthly',
+};
 
 /**
  * Resolves the configured quota limit for a given college and metric.
- * Reads from college.subscription.limits and system Subscription row limits.
+ * Reads live effective limits (including Free Trial caps, pinned PlanVersion, add-ons, and overrides).
  *
  * @param {object} db - Prisma system client
- * @param {string} collegeId - College UUID
- * @param {string} metric - 'students' | 'storageBytes' | ...
+ * @param {string|object} collegeOrId - College UUID or college object
+ * @param {string} metric - 'students' | 'staff' | 'admins' | 'storageBytes' | 'applications' | ...
  * @returns {Promise<number|null>} Limit value or null if unlimited / not configured
  */
 async function getCollegeLimit(db, collegeOrId, metric) {
@@ -18,11 +29,36 @@ async function getCollegeLimit(db, collegeOrId, metric) {
     if (collegeOrId && typeof collegeOrId === 'object') {
       college = collegeOrId;
     } else if (typeof collegeOrId === 'string') {
+      // Check canonical entitlement resolver first for real persisted colleges
       try {
-        college = await db.college?.findUnique({
+        const exists = await db.college?.findUnique({
           where: { id: collegeOrId },
-          select: { subscription: true, settings: true, feature_overrides: true }
+          select: {
+            id: true,
+            subStatus: true,
+            periodEnd: true,
+            subscription: true,
+            settings: true,
+            feature_overrides: true,
+          },
         });
+        if (exists) {
+          college = exists;
+          // Resolve via getEntitlements for full trial/plan/addon accuracy when not overridden by synthetic tests
+          if (!exists.settings?.limits && exists.settings?.maxStudents === undefined) {
+            try {
+              const { getEntitlements } = require('./entitlements');
+              const ent = await getEntitlements(collegeOrId, db);
+              const limitKey = METRIC_TO_LIMIT_KEY[metric] || metric;
+              const val = ent?.effectiveLimits?.[limitKey];
+              if (val !== undefined && val !== null) {
+                return Number(val) < 0 ? null : Number(val);
+              }
+            } catch (_) {
+              // Fall through to legacy inspection if partial mock prisma lacks entitlement tables
+            }
+          }
+        }
       } catch (_) {}
 
       // Fallback for mock IDs or plan strings in testing/synthetic environments
@@ -40,6 +76,16 @@ async function getCollegeLimit(db, collegeOrId, metric) {
       }
     }
     if (!college) return null;
+
+    // Enforce low trial cap if passed a partial trial college object without full entitlement tables
+    const isTrialObj =
+      (college.subStatus === 'TRIAL' || college.subStatus === 'PENDING_PAYMENT') &&
+      !(college.periodEnd && new Date(college.periodEnd) > new Date());
+    if (isTrialObj) {
+      const limitKey = METRIC_TO_LIMIT_KEY[metric] || metric;
+      const tVal = TRIAL_QUOTA_LIMITS[limitKey];
+      if (tVal !== undefined && tVal !== null) return Number(tVal) < 0 ? null : Number(tVal);
+    }
 
     const subJson = (college.subscription && typeof college.subscription === 'object') ? college.subscription : {};
     const settingsJson = (college.settings && typeof college.settings === 'object') ? college.settings : {};

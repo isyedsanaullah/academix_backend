@@ -146,6 +146,7 @@ app.use('/api/auth/verify-email', sensitiveActionLimiter);
 app.use('/api/auth/resend-verification', sensitiveActionLimiter);
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/me', require('./routes/me.routes'));
+app.use('/api/banners', require('./routes/banner.routes'));
 app.use('/api/super-admin', require('./routes/superAdmin.routes'));
 app.use('/api/superadmin', require('./routes/superAdmin.routes'));
 app.use('/api/super-admin/usage/ai', require('./routes/superAdminAiUsage.routes'));
