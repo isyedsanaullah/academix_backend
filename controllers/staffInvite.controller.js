@@ -4,6 +4,7 @@ const bcrypt = require('bcryptjs');
 const crypto = require('crypto');
 const { getSystemClient } = require('../config/prismaManager');
 const { generateToken, hashToken } = require('../utils/token');
+const { getFrontendBaseUrl } = require('../config/env');
 const { send: sendMail } = require('../services/mailService');
 const { logActivity } = require('../services/activityLog.service');
 const { ACTIONS, CATEGORIES } = require('../config/activityConstants');
@@ -113,10 +114,7 @@ exports.createStaff = async (req, res, next) => {
       failed: []
     };
 
-    const rootDomain = process.env.ROOT_DOMAIN || 'collegeshub.org';
-    const appUrl = process.env.APP_URL || 'https://collegeshub.org';
-    const slug = (college.slug || college.code).toLowerCase();
-    const isDev = process.env.NODE_ENV === 'development';
+    const frontendBaseUrl = getFrontendBaseUrl();
 
     for (const item of incomingList) {
       const name = (item.name || '').trim();
@@ -202,10 +200,8 @@ exports.createStaff = async (req, res, next) => {
         }).catch(() => {});
       }
 
-      // Build Set-Password URL on tenant subdomain
-      const setPasswordUrl = isDev
-        ? `http://${slug}.localhost:3000/set-password/${rawToken}`
-        : `https://${slug}.${rootDomain}/set-password/${rawToken}`;
+      // Build Set-Password URL on canonical HTTPS app origin (avoid unprovisioned col-* subdomains)
+      const setPasswordUrl = `${frontendBaseUrl}/set-password/${rawToken}`;
 
       // Dispatch invitation email via mailService wrapper
       const emailHtml = `
@@ -241,7 +237,8 @@ exports.createStaff = async (req, res, next) => {
           to: email,
           subject: `Set your password for ${college.name} — Collegeshub`,
           html: emailHtml,
-          text: `Welcome to ${college.name}! Set your password here: ${setPasswordUrl} (Link expires in 3 days)`
+          text: `Welcome to ${college.name}! Set your password here: ${setPasswordUrl} (Link expires in 3 days)`,
+          isSecurityEmail: true
         });
       } catch (mailErr) {
         console.error(`Invitation email delivery failed for ${email}:`, mailErr.message);
@@ -332,10 +329,6 @@ exports.resendStaffInvite = async (req, res, next) => {
       select: { name: true, slug: true, code: true }
     });
 
-    const rootDomain = process.env.ROOT_DOMAIN || 'collegeshub.org';
-    const slug = (college.slug || college.code).toLowerCase();
-    const isDev = process.env.NODE_ENV === 'development';
-
     const { token: rawToken, hash: tokenHash } = generateToken(32);
     const expiresAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
@@ -347,9 +340,7 @@ exports.resendStaffInvite = async (req, res, next) => {
       }
     });
 
-    const setPasswordUrl = isDev
-      ? `http://${slug}.localhost:3000/set-password/${rawToken}`
-      : `https://${slug}.${rootDomain}/set-password/${rawToken}`;
+    const setPasswordUrl = `${getFrontendBaseUrl()}/set-password/${rawToken}`;
 
     const emailHtml = `
       <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 600px; margin: 0 auto; padding: 24px; color: #1e293b; background: #ffffff;">
@@ -376,7 +367,8 @@ exports.resendStaffInvite = async (req, res, next) => {
       to: user.email,
       subject: `New password setup link for ${college.name}`,
       html: emailHtml,
-      text: `Set your password for ${college.name}: ${setPasswordUrl}`
+      text: `Set your password for ${college.name}: ${setPasswordUrl}`,
+      isSecurityEmail: true
     }).catch(e => console.error('Resend email error:', e.message));
 
     res.json({
